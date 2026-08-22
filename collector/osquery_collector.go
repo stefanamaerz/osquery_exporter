@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -11,9 +12,8 @@ import (
 )
 
 // Runner executes an osquery SQL query and returns the parsed result.
-// This interface is implemented by *osquery.OsqueryRunner and can be mocked in tests.
 type Runner interface {
-	Run(query string) (*model.OsqueryResult, error)
+	Run(ctx context.Context, query string) (*model.OsqueryResult, error)
 }
 
 // singleQueryCollector represents a metric/query definition for a single osquery call
@@ -134,7 +134,7 @@ func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, col := range c.collectors {
 		go func(col singleQueryCollector) {
 			defer wg.Done()
-			result, err := c.runner.Run(col.Query())
+			result, err := c.runner.Run(context.Background(), col.Query())
 			if err != nil {
 				c.log.Error("failed to run query", "query", col.Query(), "error", err)
 				c.success.WithLabelValues(col.String()).Set(0.0)

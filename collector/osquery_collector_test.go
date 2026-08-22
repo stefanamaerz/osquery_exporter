@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -20,7 +21,7 @@ type fakeRunner struct {
 	errs    map[string]error
 }
 
-func (f *fakeRunner) Run(query string) (*model.OsqueryResult, error) {
+func (f *fakeRunner) Run(ctx context.Context, query string) (*model.OsqueryResult, error) {
 	if err, ok := f.errs[query]; ok {
 		return nil, err
 	}

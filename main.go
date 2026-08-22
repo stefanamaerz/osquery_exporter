@@ -3,9 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -48,25 +50,41 @@ func main() {
 		log.Error("failed to create osquery runner", "error", err)
 		os.Exit(1)
 	}
+	defer runner.Close()
 
 	c := collector.NewOsqueryCollector(runner, config.Metrics, log)
 	prometheus.MustRegister(c)
 
-	handler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{})
+	handler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{
+		ErrorHandling:       promhttp.ContinueOnError,
+		ErrorLog:            slog.NewLogLogger(log.Handler(), slog.LevelError),
+		MaxRequestsInFlight: 2,
+		Timeout:             60 * time.Second,
+	})
 
-	http.Handle(*metricsPath, handler)
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.Handle(*metricsPath, handler)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(fmt.Sprintf(`<html>
 <head><title>Osquery Exporter</title></head>
 <body>
 <h1>Osquery Exporter</h1>
 <p><a href="%s">Metrics</a></p>
 </body>
-</html>`, *metricsPath)))
+</html>`, html.EscapeString(*metricsPath))))
 	})
 
+	srv := &http.Server{
+		Addr:              *listenAddress,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      90 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
 	log.Info("listening", "address", *listenAddress)
-	if err := http.ListenAndServe(*listenAddress, nil); err != nil {
+	if err := srv.ListenAndServe(); err != nil {
 		log.Error("http server failed", "error", err)
 		os.Exit(1)
 	}
