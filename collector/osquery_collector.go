@@ -2,12 +2,13 @@ package collector
 
 import (
 	"fmt"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/common/log"
-	"github.com/zwopir/osquery_exporter/model"
-	"github.com/zwopir/osquery_exporter/osquery"
+	"log/slog"
 	"strconv"
 	"sync"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/stefanamaerz/osquery_exporter/model"
+	"github.com/stefanamaerz/osquery_exporter/osquery"
 )
 
 // singleQueryCollector represents a metric/query definition for a single osquery call
@@ -23,7 +24,6 @@ type singleQueryCollector interface {
 
 // update maps the osquery query result to the singleQueryCollector and updates the provided channel accordingly
 func update(sqc singleQueryCollector, result *model.OsqueryResult, ch chan<- prometheus.Metric) error {
-	log.Debugf("updating metric %q", sqc.String())
 	// metrics with no labels can only accept one result set
 	if len(sqc.Labels()) == 0 && len(result.Items) > 1 {
 		return fmt.Errorf("metrics with no labels can only accept one result set")
@@ -35,7 +35,7 @@ func update(sqc singleQueryCollector, result *model.OsqueryResult, ch chan<- pro
 		}
 		valueAsFloat, err := strconv.ParseFloat(value, 64)
 		if err != nil {
-			return fmt.Errorf("query %q result %q can't be converted to float", sqc.Query(), value)
+			return fmt.Errorf("query %q result %q can't be converted to float: %w", sqc.Query(), value, err)
 		}
 		labels := []string{}
 		for _, labelIdentifier := range sqc.Labels() {
@@ -60,45 +60,47 @@ func update(sqc singleQueryCollector, result *model.OsqueryResult, ch chan<- pro
 type OsqueryCollector struct {
 	runner         *osquery.OsqueryRunner
 	collectors     map[string]singleQueryCollector
+	log            *slog.Logger
 	queryDurations *prometheus.SummaryVec
 	success        *prometheus.GaugeVec
 	resultsets     *prometheus.GaugeVec
 }
 
 // NewOsqueryCollector creates an OsQueryCollector from a given osquery-runner and a set of metric definitions
-func NewOsqueryCollector(r *osquery.OsqueryRunner, m model.Metrics) *OsqueryCollector {
+func NewOsqueryCollector(r *osquery.OsqueryRunner, m model.Metrics, log *slog.Logger) *OsqueryCollector {
 	collectors := make(map[string]singleQueryCollector)
 	for _, c := range m.Counters {
-		log.Infof("adding %s to OsqueryCollector", c.String())
+		log.Info("adding collector", "name", c.String())
 		collectors[c.Id()] = c
 	}
 	for _, cv := range m.CounterVecs {
-		log.Infof("adding %s to OsqueryCollector", cv.String())
+		log.Info("adding collector", "name", cv.String())
 		collectors[cv.Id()] = cv
 	}
 	for _, g := range m.Gauges {
-		log.Infof("adding %s to OsqueryCollector", g.String())
+		log.Info("adding collector", "name", g.String())
 		collectors[g.Id()] = g
 	}
 	for _, gv := range m.GaugeVecs {
-		log.Infof("adding %s to OsqueryCollector", gv.String())
+		log.Info("adding collector", "name", gv.String())
 		collectors[gv.Id()] = gv
 	}
 	return &OsqueryCollector{
 		runner:     r,
 		collectors: collectors,
+		log:        log,
 		queryDurations: prometheus.NewSummaryVec(
 			prometheus.SummaryOpts{
 				Namespace: "osquery_exporter",
-				Name:      "query_duration",
-				Help:      "Query duration",
+				Name:      "query_duration_seconds",
+				Help:      "Duration of osquery query execution in seconds",
 			},
 			[]string{"name"}),
 		success: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: "osquery_exporter",
 				Name:      "query_success",
-				Help:      "Query execution status",
+				Help:      "Query execution status (1 = success, 0 = error)",
 			},
 			[]string{"name"},
 		),
@@ -129,21 +131,18 @@ func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
 			defer wg.Done()
 			result, err := c.runner.Run(col.Query())
 			if err != nil {
-				log.Errorf("failed to run query %s: %s", col.Query(), err)
+				c.log.Error("failed to run query", "query", col.Query(), "error", err)
 				c.success.WithLabelValues(col.String()).Set(0.0)
 				return
 			}
 			c.resultsets.WithLabelValues(col.String()).Set(float64(len(result.Items)))
-			err = update(col, result, ch)
-			if err != nil {
-				log.Warnf("metric %s errors on update: %s", col.String(), err)
+			if err := update(col, result, ch); err != nil {
+				c.log.Warn("metric update error", "metric", col.String(), "error", err)
 				c.success.WithLabelValues(col.String()).Set(0.0)
 				return
 			}
-			log.Debugf("metric %s took %s seconds to run", col.String(), result.Runtime)
-			c.queryDurations.WithLabelValues(col.String()).Observe(
-				result.Runtime.Seconds(),
-			)
+			c.log.Debug("query finished", "metric", col.String(), "duration", result.Runtime)
+			c.queryDurations.WithLabelValues(col.String()).Observe(result.Runtime.Seconds())
 			c.success.WithLabelValues(col.String()).Set(1.0)
 		}(col)
 	}
@@ -151,5 +150,4 @@ func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
 	c.success.Collect(ch)
 	c.resultsets.Collect(ch)
 	wg.Wait()
-
 }

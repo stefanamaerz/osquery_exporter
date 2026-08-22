@@ -2,8 +2,10 @@ package model
 
 import (
 	"crypto/md5"
-	"github.com/prometheus/client_golang/prometheus"
+	"encoding/hex"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 const namespace = "osquery_exporter"
@@ -16,8 +18,9 @@ type Config struct {
 
 // OsQueryRuntime holds the information for the osquery binary and command invocation
 type OsQueryRuntime struct {
-	Binary  string `yaml:"osquery"`
-	Timeout string `yaml:"timeout"`
+	Binary       string   `yaml:"osquery"`
+	Timeout      string   `yaml:"timeout"`
+	DefaultFlags []string `yaml:"default_flags,omitempty"`
 }
 
 // Metrics holds the metric definitions that are converted to prometheus metrics
@@ -166,6 +169,6 @@ type OsqueryResult struct {
 }
 
 func id(s string) string {
-	md5sum := md5.Sum([]byte(s))
-	return string(md5sum[:])
+	sum := md5.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
