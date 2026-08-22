@@ -52,7 +52,11 @@ func main() {
 	}
 	defer runner.Close()
 
-	c := collector.NewOsqueryCollector(runner, config.Metrics, log)
+	c, err := collector.NewOsqueryCollector(runner, config.Metrics, log)
+	if err != nil {
+		log.Error("invalid metric configuration", "error", err)
+		os.Exit(1)
+	}
 	prometheus.MustRegister(c)
 
 	handler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{
