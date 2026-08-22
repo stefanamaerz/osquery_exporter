@@ -29,3 +29,5 @@ osquery_exporter
 
 # Coverage output
 coverage.out
+*.pyc
+__pycache__/
