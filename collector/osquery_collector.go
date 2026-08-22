@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,6 +46,7 @@ func emitMetrics(sqc singleQueryCollector, result *model.OsqueryResult) ([]prome
 	desc := sqc.Desc()
 	valueType := sqc.ValueType()
 	metrics := make([]prometheus.Metric, 0, len(result.Items))
+	seen := make(map[string]struct{}, len(result.Items))
 
 	for _, item := range result.Items {
 		value, ok := item[sqc.Value()]
@@ -63,6 +65,16 @@ func emitMetrics(sqc singleQueryCollector, result *model.OsqueryResult) ([]prome
 				return nil, metricError{msg: fmt.Sprintf("query %q doesn't contain a label key %q", sqc.Query(), labelIdentifier)}
 			}
 		}
+		// A duplicate label set would produce two series with identical labels.
+		// Under promhttp.ContinueOnError that surfaces as a 200 with one row
+		// silently dropped while query_success reports 1, so detect it here and
+		// fail the metric instead.
+		key := strings.Join(labels, "\x00")
+		if _, dup := seen[key]; dup {
+			return nil, metricError{msg: fmt.Sprintf("query %q returned duplicate label set %v; add the label columns to GROUP BY or widen labelidentifier", sqc.Query(), labels)}
+		}
+		seen[key] = struct{}{}
+
 		m, err := prometheus.NewConstMetric(desc, valueType, valueAsFloat, labels...)
 		if err != nil {
 			return nil, metricError{msg: fmt.Sprintf("cannot build metric for query %q: %v", sqc.Query(), err)}
@@ -83,6 +95,16 @@ type OsqueryCollector struct {
 	resultsets     *prometheus.GaugeVec
 }
 
+// reservedNames are the exporter's internal metric names. A config metric with
+// one of these names would collide with the internal series and panic
+// prometheus.MustRegister with an opaque message, so reject it at construction
+// with a readable error instead.
+var reservedNames = map[string]struct{}{
+	"query_duration_seconds": {},
+	"query_success":          {},
+	"resultsets":             {},
+}
+
 // NewOsqueryCollector creates an OsQueryCollector from a given osquery-runner and a set of metric definitions.
 // It fails fast if the config contains duplicate metric names or invalid metric descriptors.
 func NewOsqueryCollector(r Runner, m model.Metrics, log *slog.Logger) (*OsqueryCollector, error) {
@@ -91,6 +113,9 @@ func NewOsqueryCollector(r Runner, m model.Metrics, log *slog.Logger) (*OsqueryC
 		name := c.String()
 		if name == "" {
 			return fmt.Errorf("metric name cannot be empty")
+		}
+		if _, bad := reservedNames[name]; bad {
+			return fmt.Errorf("metric name %q is reserved by the exporter", name)
 		}
 		if c.Query() == "" {
 			return fmt.Errorf("metric %q: query cannot be empty", name)

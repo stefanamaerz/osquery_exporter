@@ -213,3 +213,114 @@ func TestCollectorDescribe(t *testing.T) {
 		t.Fatalf("expected 3 descriptors, got %d", count)
 	}
 }
+
+func TestNewOsqueryCollectorReservedName(t *testing.T) {
+	for _, reserved := range []string{"query_duration_seconds", "query_success", "resultsets"} {
+		m := model.Metrics{
+			Gauges: []model.Gauge{
+				{Metric: model.Metric{Name: reserved, Help: "h", Querystring: "SELECT 1 AS v", ValueIdentifier: "v"}},
+			},
+		}
+		if _, err := NewOsqueryCollector(&fakeRunner{}, m, discardLogger()); err == nil {
+			t.Fatalf("expected error for reserved metric name %q", reserved)
+		}
+	}
+}
+
+func TestEmitMetricsDuplicateLabelSet(t *testing.T) {
+	m := model.GaugeVec{MetricVec: model.MetricVec{
+		Metric:          model.Metric{Name: "by_shell", Help: "h", Querystring: "SELECT 1", ValueIdentifier: "count"},
+		LabelIdentifier: []string{"shell"},
+	}}
+	res := &model.OsqueryResult{
+		Items: []model.OsqueryItem{
+			{"count": "1", "shell": "/bin/sh"},
+			{"count": "2", "shell": "/bin/sh"}, // duplicate label set
+		},
+	}
+	if _, err := emitMetrics(m, res); err == nil {
+		t.Fatal("expected error for duplicate label set, got nil")
+	}
+}
+
+// TestGatherPedantic exercises the collector through a real registry. Calling
+// c.Collect directly never surfaces Describe/Collect inconsistency or
+// duplicate-series errors; Gather on a pedantic registry does.
+func TestGatherPedantic(t *testing.T) {
+	fr := &fakeRunner{
+		results: map[string]*model.OsqueryResult{
+			"SELECT 1":       {Items: []model.OsqueryItem{{"count": "42"}}, Runtime: time.Millisecond},
+			"SELECT byshell": {Items: []model.OsqueryItem{{"count": "1", "shell": "/bin/sh"}, {"count": "3", "shell": "/bin/bash"}}, Runtime: time.Millisecond},
+		},
+	}
+	m := model.Metrics{
+		Gauges: []model.Gauge{
+			{Metric: model.Metric{Name: "ones", Help: "h", Querystring: "SELECT 1", ValueIdentifier: "count"}},
+		},
+		GaugeVecs: []model.GaugeVec{
+			{MetricVec: model.MetricVec{
+				Metric:          model.Metric{Name: "by_shell", Help: "h", Querystring: "SELECT byshell", ValueIdentifier: "count"},
+				LabelIdentifier: []string{"shell"},
+			}},
+		},
+	}
+	c, err := NewOsqueryCollector(fr, m, discardLogger())
+	if err != nil {
+		t.Fatalf("NewOsqueryCollector failed: %v", err)
+	}
+
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(c)
+	if _, err := reg.Gather(); err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+}
+
+// TestGatherDuplicateLabelSetFailsSuccess asserts that a duplicate label set in
+// a vector result drives query_success to 0 through a real registry gather.
+func TestGatherDuplicateLabelSetFailsSuccess(t *testing.T) {
+	fr := &fakeRunner{
+		results: map[string]*model.OsqueryResult{
+			"SELECT byshell": {Items: []model.OsqueryItem{
+				{"count": "1", "shell": "/bin/sh"},
+				{"count": "2", "shell": "/bin/sh"}, // duplicate
+			}, Runtime: time.Millisecond},
+		},
+	}
+	m := model.Metrics{
+		GaugeVecs: []model.GaugeVec{
+			{MetricVec: model.MetricVec{
+				Metric:          model.Metric{Name: "by_shell", Help: "h", Querystring: "SELECT byshell", ValueIdentifier: "count"},
+				LabelIdentifier: []string{"shell"},
+			}},
+		},
+	}
+	c, err := NewOsqueryCollector(fr, m, discardLogger())
+	if err != nil {
+		t.Fatalf("NewOsqueryCollector failed: %v", err)
+	}
+
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(c)
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+
+	var successVal float64 = -1
+	for _, mf := range mfs {
+		if mf.GetName() != "osquery_exporter_query_success" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "name" && l.GetValue() == "by_shell" {
+					successVal = m.GetGauge().GetValue()
+				}
+			}
+		}
+	}
+	if successVal != 0 {
+		t.Fatalf("query_success for by_shell = %v, want 0 on duplicate label set", successVal)
+	}
+}
