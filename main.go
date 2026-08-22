@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stefanamaerz/osquery_exporter/collector"
 	"github.com/stefanamaerz/osquery_exporter/model"
@@ -22,9 +23,10 @@ import (
 
 func main() {
 	var (
-		configFile    = flag.String("config.file", "config.yaml", "Config file")
-		listenAddress = flag.String("web.listen-address", ":9232", "Address on which to expose metrics and web interface.")
-		metricsPath   = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
+		configFile             = flag.String("config.file", "config.yaml", "Config file")
+		listenAddress          = flag.String("web.listen-address", ":9232", "Address on which to expose metrics and web interface.")
+		metricsPath            = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
+		enableRuntimeGoMetrics = flag.Bool("web.enable-runtime-golang-metrics", true, "Expose Go runtime and process metrics on /metrics.")
 	)
 	flag.Parse()
 
@@ -60,7 +62,15 @@ func main() {
 		log.Error("invalid metric configuration", "error", err)
 		os.Exit(1)
 	}
-	prometheus.MustRegister(c)
+
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(c)
+	if *enableRuntimeGoMetrics {
+		reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	}
+
+	prometheus.DefaultRegisterer = reg
+	prometheus.DefaultGatherer = reg
 
 	handler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{
 		ErrorHandling:       promhttp.ContinueOnError,
