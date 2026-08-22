@@ -26,3 +26,6 @@ _testmain.go
 # Build artifacts
 osquery_exporter
 .bin/
+
+# Coverage output
+coverage.out
