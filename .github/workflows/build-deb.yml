@@ -1,0 +1,78 @@
+name: Build .deb
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  release:
+    types: [created, published]
+
+jobs:
+  build-deb:
+    name: Build Debian package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.0'
+          cache-dependency-path: go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -ldflags="-s -w" -o osquery_exporter .
+
+      - name: Build .deb package
+        id: deb
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ -z "$VERSION" ] || [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            VERSION="0.0.0-${GITHUB_SHA::8}"
+          fi
+          PKGDIR="osquery_exporter_${VERSION}_amd64"
+          mkdir -p "${PKGDIR}/usr/bin"
+          mkdir -p "${PKGDIR}/usr/share/doc/osquery_exporter"
+          mkdir -p "${PKGDIR}/DEBIAN"
+          cp osquery_exporter "${PKGDIR}/usr/bin/"
+          cp README.md "${PKGDIR}/usr/share/doc/osquery_exporter/"
+          cat > "${PKGDIR}/DEBIAN/control" <<CONTROL
+          Package: osquery-exporter
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Stefan Maerz <104440170+stefanamaerz@users.noreply.github.com>
+          Description: Prometheus exporter for osquery query results
+           osquery_exporter runs osqueryi queries on each Prometheus scrape
+           and exposes the results as Prometheus metrics.
+          CONTROL
+          dpkg-deb --build "${PKGDIR}"
+          echo "deb_file=${PKGDIR}.deb" >> "$GITHUB_OUTPUT"
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: osquery-exporter-deb
+          path: ${{ steps.deb.outputs.deb_file }}
+          retention-days: 30
+
+      - name: Upload .deb to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" "${{ steps.deb.outputs.deb_file }}" --clobber
