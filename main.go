@@ -67,6 +67,7 @@ func main() {
 		ErrorLog:            slog.NewLogLogger(log.Handler(), slog.LevelError),
 		MaxRequestsInFlight: 2,
 		Timeout:             60 * time.Second,
+		Registry:            prometheus.DefaultRegisterer, // exposes promhttp_metric_handler_errors_total
 	})
 
 	mux := http.NewServeMux()
