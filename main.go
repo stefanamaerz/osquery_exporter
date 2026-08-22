@@ -27,6 +27,7 @@ func main() {
 		listenAddress          = flag.String("web.listen-address", ":9232", "Address on which to expose metrics and web interface.")
 		metricsPath            = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
 		enableRuntimeGoMetrics = flag.Bool("web.enable-runtime-golang-metrics", true, "Expose Go runtime and process metrics on /metrics.")
+		maxRequestsInFlight    = flag.Int("web.max-requests-in-flight", 2, "Maximum number of simultaneous /metrics scrapes. 0 disables the limit.")
 	)
 	flag.Parse()
 
@@ -75,7 +76,7 @@ func main() {
 	handler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{
 		ErrorHandling:       promhttp.ContinueOnError,
 		ErrorLog:            slog.NewLogLogger(log.Handler(), slog.LevelError),
-		MaxRequestsInFlight: 2,
+		MaxRequestsInFlight: *maxRequestsInFlight,
 		Timeout:             60 * time.Second,
 		Registry:            prometheus.DefaultRegisterer, // exposes promhttp_metric_handler_errors_total
 	})
