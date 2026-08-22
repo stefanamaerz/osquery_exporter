@@ -2,23 +2,21 @@
 runtime:
   # Path to osqueryd's Thrift extension socket.
   socket_path: "/var/run/osquery/osquery.em"
+  # Per-query timeout. This bounds both socket wait time and query execution.
   timeout: 10s
 
 metrics:
-  counters:
+  # NOTE: counters must be monotonically increasing values. Most osquery
+  # count(*) results are gauges because they can decrease over time.
+  counters: []
+
+  countervecs: []
+
+  gauges:
     - name: history_lines_count
       help: "number of entries in the history"
       query: "select count(*) as count from shell_history"
       valueidentifier: count
-  countervecs:
-    - name: last_users_count
-      help: "number of last logins by username and tty"
-      query: "select username, tty, count(*) as count from last where username != '' group by username, tty"
-      valueidentifier: count
-      labelidentifier:
-        - username
-        - tty
-  gauges:
     - name: block_devices
       help: "number of block devices which are not partitions"
       query: "select count(*) as count from block_devices where parent = ''"
@@ -28,6 +26,13 @@ metrics:
       query: "select count(*) as count from crontab"
       valueidentifier: count
   gaugevecs:
+    - name: last_users_count
+      help: "number of last logins by username and tty"
+      query: "select username, tty, count(*) as count from last where username != '' group by username, tty"
+      valueidentifier: count
+      labelidentifier:
+        - username
+        - tty
     - name: users_by_shell
       help: "number of users by login shell"
       query: "select count(*) as count, shell from users group by shell"
