@@ -29,3 +29,6 @@ osquery_exporter
 
 # Coverage output
 coverage.out
+
+# Python bytecode
+__pycache__/

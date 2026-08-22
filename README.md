@@ -110,6 +110,17 @@ go vet ./...
 go test ./...
 ```
 
+### Load testing
+
+`util/test_exporter.py` (Linux only) checks correctness and measures CPU/RSS of `osqueryd` and the exporter under load. By default it drives max throughput (closed-loop); use `--load-rps` for a realistic, fixed scrape rate (open-loop):
+
+```bash
+# Simulate Prometheus scraping once every 5s for 60s
+python3 util/test_exporter.py --load-only --load-duration 60 --load-rps 0.2
+```
+
+Latency is measured per request after the rate limiter grants a slot, so throttling never inflates p50/p95. Omit `--load-rps` for unthrottled max-throughput.
+
 ## License
 
 See [LICENSE](LICENSE).
