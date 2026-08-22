@@ -16,11 +16,10 @@ type Config struct {
 	Metrics        Metrics        `yaml:"metrics"`
 }
 
-// OsQueryRuntime holds the information for the osquery binary and command invocation
+// OsQueryRuntime holds the information for connecting to osqueryd's Thrift socket.
 type OsQueryRuntime struct {
-	Binary       string   `yaml:"osquery"`
-	Timeout      string   `yaml:"timeout"`
-	DefaultFlags []string `yaml:"default_flags,omitempty"`
+	SocketPath string `yaml:"socket_path"`
+	Timeout    string `yaml:"timeout"`
 }
 
 // Metrics holds the metric definitions that are converted to prometheus metrics
