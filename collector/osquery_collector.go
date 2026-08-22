@@ -8,8 +8,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stefanamaerz/osquery_exporter/model"
-	"github.com/stefanamaerz/osquery_exporter/osquery"
 )
+
+// Runner executes an osquery SQL query and returns the parsed result.
+// This interface is implemented by *osquery.OsqueryRunner and can be mocked in tests.
+type Runner interface {
+	Run(query string) (*model.OsqueryResult, error)
+}
 
 // singleQueryCollector represents a metric/query definition for a single osquery call
 type singleQueryCollector interface {
@@ -58,7 +63,7 @@ func update(sqc singleQueryCollector, result *model.OsqueryResult, ch chan<- pro
 // OsqueryCollector represents a collector that collects metrics from a set of osquery queries. It implements
 // prometheus Collector
 type OsqueryCollector struct {
-	runner         *osquery.OsqueryRunner
+	runner         Runner
 	collectors     map[string]singleQueryCollector
 	log            *slog.Logger
 	queryDurations *prometheus.SummaryVec
@@ -67,7 +72,7 @@ type OsqueryCollector struct {
 }
 
 // NewOsqueryCollector creates an OsQueryCollector from a given osquery-runner and a set of metric definitions
-func NewOsqueryCollector(r *osquery.OsqueryRunner, m model.Metrics, log *slog.Logger) *OsqueryCollector {
+func NewOsqueryCollector(r Runner, m model.Metrics, log *slog.Logger) *OsqueryCollector {
 	collectors := make(map[string]singleQueryCollector)
 	for _, c := range m.Counters {
 		log.Info("adding collector", "name", c.String())
@@ -146,8 +151,8 @@ func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
 			c.success.WithLabelValues(col.String()).Set(1.0)
 		}(col)
 	}
+	wg.Wait()
 	c.queryDurations.Collect(ch)
 	c.success.Collect(ch)
 	c.resultsets.Collect(ch)
-	wg.Wait()
 }
