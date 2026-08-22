@@ -53,12 +53,18 @@ runtime:
   timeout: 10s
 
 metrics:
-  counters:
+  counters: []
+  countervecs: []
+  gauges:
     - name: history_lines_count
       help: "number of entries in the history"
       query: "select count(*) as count from shell_history"
       valueidentifier: count
-  countervecs:
+    - name: block_devices
+      help: "number of block devices which are not partitions"
+      query: "select count(*) as count from block_devices where parent = ''"
+      valueidentifier: count
+  gaugevecs:
     - name: last_users_count
       help: "number of last logins by username and tty"
       query: "select username, tty, count(*) as count from last where username != '' group by username, tty"
@@ -66,12 +72,6 @@ metrics:
       labelidentifier:
         - username
         - tty
-  gauges:
-    - name: block_devices
-      help: "number of block devices which are not partitions"
-      query: "select count(*) as count from block_devices where parent = ''"
-      valueidentifier: count
-  gaugevecs:
     - name: users_by_shell
       help: "number of users by login shell"
       query: "select count(*) as count, shell from users group by shell"
@@ -82,12 +82,14 @@ metrics:
 
 `runtime.socket_path` is required and must point at `osqueryd`'s Thrift extension socket.
 
+`runtime.timeout` bounds both the socket wait time and the query execution time.
+
 ### Metric types
 
 - `counters` and `gauges` expect queries that return a single row with a single numeric value.
 - `countervecs` and `gaugevecs` expect queries that return multiple rows. Each row must include the columns listed in `labelidentifier`, plus the value column named by `valueidentifier`.
 
-It is up to the user to decide whether an osquery query result is semantically a counter or a gauge. See:
+**Important:** Only use `counters`/`countervecs` for values that are monotonically increasing over time. Most `count(*)` queries in osquery return values that can decrease (history truncation, log rotation, row deletion), so they should be `gauges`/`gaugevecs`. Using a `counter` for a non-monotonic value causes `rate()` and `increase()` to produce spurious counter-reset artifacts. See:
 
 - <https://prometheus.io/docs/concepts/metric_types/>
 - <https://prometheus.io/docs/practices/naming/>

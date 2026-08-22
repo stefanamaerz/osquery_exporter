@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stefanamaerz/osquery_exporter/collector"
@@ -122,10 +123,12 @@ func startOsqueryd(t *testing.T) string {
 
 func waitForSocket(t *testing.T, socketPath string) {
 	t.Helper()
-	for i := 0; i < 50; i++ {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
 		if _, err := os.Stat(socketPath); err == nil {
 			return
 		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("osqueryd extension socket %q did not appear", socketPath)
 }
