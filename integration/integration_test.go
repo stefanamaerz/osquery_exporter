@@ -4,9 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stefanamaerz/osquery_exporter/collector"
@@ -14,20 +12,20 @@ import (
 	"github.com/stefanamaerz/osquery_exporter/osquery"
 )
 
-func lookupOsqueryi(t *testing.T) (string, bool) {
+func lookupOsqueryd(t *testing.T) (string, bool) {
 	t.Helper()
-	exe, err := exec.LookPath("osqueryi")
+	exe, err := exec.LookPath("osqueryd")
 	if err != nil {
 		return "", false
 	}
 	return exe, true
 }
 
-func skipIfNoOsqueryi(t *testing.T) string {
+func skipIfNoOsqueryd(t *testing.T) string {
 	t.Helper()
-	exe, ok := lookupOsqueryi(t)
+	exe, ok := lookupOsqueryd(t)
 	if !ok {
-		t.Skip("osqueryi not found in PATH; skipping integration test")
+		t.Skip("osqueryd not found in PATH; skipping integration test")
 	}
 	return exe
 }
@@ -36,13 +34,15 @@ func infoLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }
 
-func TestRunnerWithRealOsqueryi(t *testing.T) {
-	skipIfNoOsqueryi(t)
+func TestThriftRunnerWithRealOsqueryd(t *testing.T) {
+	socketPath := startOsqueryd(t)
 
-	r, err := osquery.NewRunner("osqueryi", "10s", nil, infoLog())
+	r, err := osquery.NewThriftRunner(socketPath, "10s", infoLog())
 	if err != nil {
-		t.Fatalf("NewRunner failed: %v", err)
+		t.Fatalf("NewThriftRunner failed: %v", err)
 	}
+	t.Cleanup(r.Close)
+
 	res, err := r.Run("SELECT 1 AS one")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
@@ -58,13 +58,15 @@ func TestRunnerWithRealOsqueryi(t *testing.T) {
 	}
 }
 
-func TestCollectorWithRealOsqueryi(t *testing.T) {
-	skipIfNoOsqueryi(t)
+func TestCollectorWithRealOsqueryd(t *testing.T) {
+	socketPath := startOsqueryd(t)
 
-	r, err := osquery.NewRunner("osqueryi", "10s", nil, infoLog())
+	r, err := osquery.NewThriftRunner(socketPath, "10s", infoLog())
 	if err != nil {
-		t.Fatalf("NewRunner failed: %v", err)
+		t.Fatalf("NewThriftRunner failed: %v", err)
 	}
+	t.Cleanup(r.Close)
+
 	m := model.Metrics{
 		Gauges: []model.Gauge{
 			{Metric: model.Metric{Name: "osquery_info_up", Help: "up metric", Querystring: "SELECT 1 AS up FROM osquery_info", ValueIdentifier: "up"}},
@@ -86,54 +88,40 @@ func TestCollectorWithRealOsqueryi(t *testing.T) {
 	}
 }
 
-func TestRunnerWithFakeBinary(t *testing.T) {
-	dir := t.TempDir()
-	fake := filepath.Join(dir, "osqueryi")
-	script := `#!/bin/sh
-printf '[{"answer":"42"}]\n'
-`
-	if err := os.WriteFile(fake, []byte(script), 0755); err != nil {
-		t.Fatalf("failed to write fake binary: %v", err)
-	}
+// startOsqueryd launches a real osqueryd in ephemeral mode and returns the
+// extension socket path. It skips the test if osqueryd is not installed.
+func startOsqueryd(t *testing.T) string {
+	t.Helper()
+	skipIfNoOsqueryd(t)
 
-	r, err := osquery.NewRunner(fake, "10s", nil, infoLog())
-	if err != nil {
-		t.Fatalf("NewRunner failed: %v", err)
+	dir := t.TempDir()
+	socketPath := dir + "/osquery.em"
+
+	cmd := exec.Command("osqueryd",
+		"--pidfile="+dir+"/osquery.pid",
+		"--database_path="+dir+"/osquery.db",
+		"--extensions_socket="+socketPath,
+		"--logger_plugin=stdout",
+		"--disable_logging=true",
+		"--disable_events",
+		"--ephemeral",
+	)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start osqueryd: %v", err)
 	}
-	res, err := r.Run("SELECT 42 AS answer")
-	if err != nil {
-		t.Fatalf("Run failed: %v", err)
-	}
-	if got := res.Items[0]["answer"]; got != "42" {
-		t.Fatalf("answer = %q, want 42", got)
-	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+
+	// Wait for the socket to appear.
+	waitForSocket(t, socketPath)
+	return socketPath
 }
 
-func TestRunnerTimeout(t *testing.T) {
-	dir := t.TempDir()
-	fake := filepath.Join(dir, "osqueryi")
-	// Loop forever so the context cancellation is the only way out.
-	// Using a shell loop instead of `sleep` avoids relying on signal handling
-	// for child process group termination.
-	script := `#!/bin/sh
-while true; do
-  true
- done
-`
-	if err := os.WriteFile(fake, []byte(script), 0755); err != nil {
-		t.Fatalf("failed to write fake binary: %v", err)
+func waitForSocket(t *testing.T, socketPath string) {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		if _, err := os.Stat(socketPath); err == nil {
+			return
+		}
 	}
-
-	r, err := osquery.NewRunner(fake, "50ms", nil, infoLog())
-	if err != nil {
-		t.Fatalf("NewRunner failed: %v", err)
-	}
-	start := time.Now()
-	_, err = r.Run("SELECT 1")
-	if err == nil {
-		t.Fatal("expected timeout error, got nil")
-	}
-	if time.Since(start) > 2*time.Second {
-		t.Fatalf("timeout took too long: %v", time.Since(start))
-	}
+	t.Fatalf("osqueryd extension socket %q did not appear", socketPath)
 }

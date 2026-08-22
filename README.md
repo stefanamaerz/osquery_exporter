@@ -18,6 +18,14 @@ go build
 
 ## Usage
 
+The exporter connects to a running `osqueryd` over its Thrift extension socket. Start `osqueryd` with an extensions socket, for example:
+
+```bash
+osqueryd --extensions_socket=/var/run/osquery/osquery.em
+```
+
+Then run the exporter:
+
 ```bash
 ./osquery_exporter -config.file=config.yaml
 ```
@@ -37,14 +45,12 @@ The configuration file is mandatory; flags have sensible defaults.
 
 ## Configuration
 
-The exporter is driven by a YAML config file. See `config_example.yaml` for a generic Linux/standard osqueryi setup, or `config.macos.yaml` for an example of running against a macOS Fleet/orbit-managed osqueryd binary.
+The exporter is driven by a YAML config file. See `config_example.yaml` for a full example.
 
 ```yaml
 runtime:
-  osquery: "osqueryi"
+  socket_path: "/var/run/osquery/osquery.em"
   timeout: 10s
-  # Optional default flags prepended to every osqueryi invocation.
-  default_flags: []
 
 metrics:
   counters:
@@ -74,6 +80,8 @@ metrics:
         - shell
 ```
 
+`runtime.socket_path` is required and must point at `osqueryd`'s Thrift extension socket.
+
 ### Metric types
 
 - `counters` and `gauges` expect queries that return a single row with a single numeric value.
@@ -83,27 +91,6 @@ It is up to the user to decide whether an osquery query result is semantically a
 
 - <https://prometheus.io/docs/concepts/metric_types/>
 - <https://prometheus.io/docs/practices/naming/>
-
-### Default flags
-
-If your `osqueryi` binary requires extra flags to run in your environment (for example, some macOS installs need a private database path and socket), you can supply them once in `runtime.default_flags` instead of defining a wrapper script.
-
-Example for a Fleet/orbit-managed osqueryd binary:
-
-```yaml
-runtime:
-  osquery: "/opt/orbit/bin/osqueryd/macos-app/stable/osquery.app/Contents/MacOS/osqueryd"
-  timeout: 15s
-  default_flags:
-    - "--pidfile=/tmp/osquery.pid"
-    - "--database_path=/tmp/osquery.db"
-    - "--extensions_socket=/tmp/osquery.em"
-    - "--logger_plugin=stderr"
-    - "--disable_logging=true"
-    - "--disable_extensions"
-    - "--ephemeral"
-    - "--S"
-```
 
 ### Implicit exporter metrics
 

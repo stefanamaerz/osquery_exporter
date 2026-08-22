@@ -1,18 +1,8 @@
 ---
 runtime:
-  osquery: "osqueryi"
+  # Path to osqueryd's Thrift extension socket.
+  socket_path: "/var/run/osquery/osquery.em"
   timeout: 10s
-  # Optional default flags prepended to every osqueryi invocation.
-  # Useful when your local osquery binary needs extra flags (e.g. macOS Fleet/orbit installs).
-  # default_flags:
-  #   - "--pidfile=/tmp/osquery.pid"
-  #   - "--database_path=/tmp/osquery.db"
-  #   - "--extensions_socket=/tmp/osquery.em"
-  #   - "--logger_plugin=stderr"
-  #   - "--disable_logging=true"
-  #   - "--disable_extensions"
-  #   - "--ephemeral"
-  #   - "--S"
 
 metrics:
   counters:

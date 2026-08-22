@@ -37,13 +37,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	r, err := osquery.NewRunner(config.OsQueryRuntime.Binary, config.OsQueryRuntime.Timeout, config.OsQueryRuntime.DefaultFlags, log)
+	if config.OsQueryRuntime.SocketPath == "" {
+		log.Error("missing required runtime.socket_path")
+		os.Exit(1)
+	}
+
+	log.Info("connecting to osqueryd", "socket_path", config.OsQueryRuntime.SocketPath, "timeout", config.OsQueryRuntime.Timeout)
+	runner, err := osquery.NewThriftRunner(config.OsQueryRuntime.SocketPath, config.OsQueryRuntime.Timeout, log)
 	if err != nil {
 		log.Error("failed to create osquery runner", "error", err)
 		os.Exit(1)
 	}
 
-	c := collector.NewOsqueryCollector(r, config.Metrics, log)
+	c := collector.NewOsqueryCollector(runner, config.Metrics, log)
 	prometheus.MustRegister(c)
 
 	handler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{})
