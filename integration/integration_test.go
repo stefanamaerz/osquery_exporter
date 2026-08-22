@@ -112,9 +112,13 @@ printf '[{"answer":"42"}]\n'
 func TestRunnerTimeout(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "osqueryi")
+	// Loop forever so the context cancellation is the only way out.
+	// Using a shell loop instead of `sleep` avoids relying on signal handling
+	// for child process group termination.
 	script := `#!/bin/sh
-sleep 10
-printf '[]\n'
+while true; do
+  true
+ done
 `
 	if err := os.WriteFile(fake, []byte(script), 0755); err != nil {
 		t.Fatalf("failed to write fake binary: %v", err)
