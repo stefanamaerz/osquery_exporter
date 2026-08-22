@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -43,7 +44,7 @@ func TestThriftRunnerWithRealOsqueryd(t *testing.T) {
 	}
 	t.Cleanup(r.Close)
 
-	res, err := r.Run("SELECT 1 AS one")
+	res, err := r.Run(context.Background(), "SELECT 1 AS one")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}

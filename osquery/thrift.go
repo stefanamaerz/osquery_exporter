@@ -1,8 +1,10 @@
 package osquery
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	osquerygo "github.com/osquery/osquery-go"
@@ -14,7 +16,7 @@ import (
 // osquery-go ExtensionManagerClient. It makes the runner testable without a
 // real osqueryd socket.
 type thriftQuerier interface {
-	Query(sql string) (*osquerygen.ExtensionResponse, error)
+	QueryContext(ctx context.Context, sql string) (*osquerygen.ExtensionResponse, error)
 	Close()
 }
 
@@ -24,6 +26,7 @@ type ThriftRunner struct {
 	socketPath string
 	timeout    time.Duration
 	log        *slog.Logger
+	mu         sync.Mutex
 	client     thriftQuerier
 }
 
@@ -46,10 +49,16 @@ func NewThriftRunner(socketPath, timeout string, log *slog.Logger) (*ThriftRunne
 }
 
 func (r *ThriftRunner) connect() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if r.client != nil {
 		r.client.Close()
 	}
-	client, err := osquerygo.NewClient(r.socketPath, r.timeout)
+	client, err := osquerygo.NewClient(r.socketPath, r.timeout,
+		osquerygo.DefaultWaitTime(r.timeout),
+		osquerygo.MaxWaitTime(r.timeout),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to connect to osqueryd thrift socket %q: %w", r.socketPath, err)
 	}
@@ -58,12 +67,42 @@ func (r *ThriftRunner) connect() error {
 }
 
 // Run executes the query over the Thrift extension socket.
-func (r *ThriftRunner) Run(query string) (*model.OsqueryResult, error) {
+func (r *ThriftRunner) Run(ctx context.Context, query string) (*model.OsqueryResult, error) {
 	begin := time.Now()
 
 	r.log.Debug("running osquery query via thrift", "query", query)
 
-	response, err := r.client.Query(query)
+	res, err := r.query(ctx, query)
+	if err == nil {
+		duration := time.Since(begin)
+		res.Runtime = duration
+		return res, nil
+	}
+
+	// Connection may have gone stale (e.g. osqueryd restarted). Try once to
+	// reconnect and rerun the query.
+	r.log.Warn("query failed, attempting reconnect", "query", query, "error", err)
+	if cerr := r.connect(); cerr != nil {
+		return nil, fmt.Errorf("query failed and reconnect failed: %w", cerr)
+	}
+	res, err = r.query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	duration := time.Since(begin)
+	res.Runtime = duration
+	return res, nil
+}
+
+func (r *ThriftRunner) query(ctx context.Context, query string) (*model.OsqueryResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+
+	r.mu.Lock()
+	client := r.client
+	r.mu.Unlock()
+
+	response, err := client.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("osqueryd query failed: %w", err)
 	}
@@ -83,15 +122,15 @@ func (r *ThriftRunner) Run(query string) (*model.OsqueryResult, error) {
 		items = append(items, item)
 	}
 
-	duration := time.Since(begin)
 	return &model.OsqueryResult{
-		Items:   items,
-		Runtime: duration,
+		Items: items,
 	}, nil
 }
 
 // Close closes the underlying Thrift client connection.
 func (r *ThriftRunner) Close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.client != nil {
 		r.client.Close()
 	}

@@ -1,6 +1,7 @@
 package osquery
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -8,7 +9,6 @@ import (
 	"time"
 
 	osquerygen "github.com/osquery/osquery-go/gen/osquery"
-	"github.com/stefanamaerz/osquery_exporter/model"
 )
 
 func discardLogger() *slog.Logger {
@@ -20,7 +20,10 @@ type fakeThriftQuerier struct {
 	err  error
 }
 
-func (f *fakeThriftQuerier) Query(sql string) (*osquerygen.ExtensionResponse, error) {
+func (f *fakeThriftQuerier) QueryContext(ctx context.Context, sql string) (*osquerygen.ExtensionResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return f.resp, f.err
 }
 
@@ -55,7 +58,7 @@ func TestThriftRunnerSuccess(t *testing.T) {
 		},
 	}
 
-	res, err := r.Run("SELECT 1 AS one")
+	res, err := r.Run(context.Background(), "SELECT 1 AS one")
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -78,7 +81,7 @@ func TestThriftRunnerConnectionError(t *testing.T) {
 	}
 	r.client = &fakeThriftQuerier{err: errors.New("connection refused")}
 
-	_, err := r.Run("SELECT 1")
+	_, err := r.Run(context.Background(), "SELECT 1")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -97,7 +100,7 @@ func TestThriftRunnerNilStatus(t *testing.T) {
 		},
 	}
 
-	_, err := r.Run("SELECT 1")
+	_, err := r.Run(context.Background(), "SELECT 1")
 	if err == nil {
 		t.Fatal("expected error for nil status, got nil")
 	}
@@ -116,28 +119,42 @@ func TestThriftRunnerStatusError(t *testing.T) {
 		},
 	}
 
-	_, err := r.Run("SELECT 1")
+	_, err := r.Run(context.Background(), "SELECT 1")
 	if err == nil {
 		t.Fatal("expected error for non-zero status, got nil")
 	}
 }
 
-func TestThriftRunnerOsqueryItemConversion(t *testing.T) {
+func TestThriftRunnerContextTimeout(t *testing.T) {
 	r := &ThriftRunner{
 		socketPath: "/tmp/osquery.em",
 		timeout:    5 * time.Second,
 		log:        discardLogger(),
 	}
-	r.client = &fakeThriftQuerier{
-		resp: &osquerygen.ExtensionResponse{
-			Status:   &osquerygen.ExtensionStatus{Code: 0},
-			Response: []map[string]string{{"a": "1", "b": "2"}},
-		},
+	r.client = &fakeThriftQuerier{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+
+	_, err := r.Run(ctx, "SELECT 1")
+	if err == nil {
+		t.Fatal("expected context deadline error, got nil")
+	}
+}
+
+func TestThriftRunnerReconnect(t *testing.T) {
+	fake := &fakeThriftQuerier{}
+	fake.err = errors.New("connection reset")
+
+	r := &ThriftRunner{
+		socketPath: "/tmp/osquery.em",
+		timeout:    5 * time.Second,
+		log:        discardLogger(),
+		client:     fake,
 	}
 
-	res, err := r.Run("SELECT *")
-	if err != nil {
-		t.Fatalf("Run failed: %v", err)
+	_, err := r.Run(context.Background(), "SELECT 1")
+	if err == nil {
+		t.Fatal("expected error after reconnect failure, got nil")
 	}
-	_ = model.OsqueryItem(res.Items[0])
 }
