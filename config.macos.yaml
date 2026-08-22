@@ -1,18 +1,25 @@
 ---
+# Example macOS config for testing against a Fleet/orbit-managed osqueryd binary.
+# This assumes there is a wrapper script on PATH named "osqueryi" that forwards
+# to your local osqueryd with the necessary unprivileged flags.
+#
+# Example wrapper (save as an executable on your PATH, e.g. ~/.local/bin/osqueryi):
+#   #!/bin/sh
+#   DB=$(mktemp -d /tmp/osquery_exporter.XXXXXX)
+#   trap 'rm -rf "$DB"' EXIT
+#   exec /opt/orbit/bin/osqueryd/macos-app/stable/osquery.app/Contents/MacOS/osqueryd \
+#     --pidfile="$DB/osquery.pid" \
+#     --database_path="$DB/osquery.db" \
+#     --extensions_socket="$DB/osquery.em" \
+#     --logger_plugin=stderr \
+#     --disable_logging=true \
+#     --disable_extensions \
+#     --ephemeral \
+#     --S "$@"
+
 runtime:
   osquery: "osqueryi"
-  timeout: 10s
-  # Optional default flags prepended to every osqueryi invocation.
-  # Useful when your local osquery binary needs extra flags (e.g. macOS Fleet/orbit installs).
-  # default_flags:
-  #   - "--pidfile=/tmp/osquery.pid"
-  #   - "--database_path=/tmp/osquery.db"
-  #   - "--extensions_socket=/tmp/osquery.em"
-  #   - "--logger_plugin=stderr"
-  #   - "--disable_logging=true"
-  #   - "--disable_extensions"
-  #   - "--ephemeral"
-  #   - "--S"
+  timeout: 15s
 
 metrics:
   counters:
@@ -44,8 +51,3 @@ metrics:
       valueidentifier: count
       labelidentifier:
         - shell
-
-## implicit metrics
-# osquery_exporter_query_duration_seconds
-# osquery_exporter_query_success
-# osquery_exporter_resultsets

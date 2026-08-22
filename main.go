@@ -1,17 +1,18 @@
 package main
 
 import (
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/prometheus/common/log"
-	"gopkg.in/yaml.v2"
-	"github.com/zwopir/osquery_exporter/collector"
-	"github.com/zwopir/osquery_exporter/model"
-	"github.com/zwopir/osquery_exporter/osquery"
-
-	"flag"
-	"io/ioutil"
-	"net/http"
+	"github.com/stefanamaerz/osquery_exporter/collector"
+	"github.com/stefanamaerz/osquery_exporter/model"
+	"github.com/stefanamaerz/osquery_exporter/osquery"
+	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -22,49 +23,45 @@ func main() {
 	)
 	flag.Parse()
 
-	var config *model.Config
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	data, err := ioutil.ReadFile(*configFile)
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = yaml.Unmarshal(data, &config)
-	if err != nil {
-		log.Fatal(err)
-	}
+	var config model.Config
 
-	r, err := osquery.NewRunner(
-		config.OsQueryRuntime.Binary,
-		config.OsQueryRuntime.Timeout,
-	)
+	data, err := os.ReadFile(*configFile)
 	if err != nil {
-		log.Fatal(err)
+		log.Error("failed to read config file", "file", *configFile, "error", err)
+		os.Exit(1)
+	}
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		log.Error("failed to parse config file", "file", *configFile, "error", err)
+		os.Exit(1)
 	}
 
-	osqueryCollector := collector.NewOsqueryCollector(
-		r,
-		config.Metrics,
-	)
+	r, err := osquery.NewRunner(config.OsQueryRuntime.Binary, config.OsQueryRuntime.Timeout, config.OsQueryRuntime.DefaultFlags, log)
+	if err != nil {
+		log.Error("failed to create osquery runner", "error", err)
+		os.Exit(1)
+	}
 
-	prometheus.MustRegister(osqueryCollector)
+	c := collector.NewOsqueryCollector(r, config.Metrics, log)
+	prometheus.MustRegister(c)
 
-	handler := promhttp.HandlerFor(prometheus.DefaultGatherer,
-		promhttp.HandlerOpts{ErrorLog: log.NewErrorLogger()})
+	handler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{})
 
 	http.Handle(*metricsPath, handler)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`<html>
-			<head><title>Osquery Exporter</title></head>
-			<body>
-			<h1>Osquery Exporter</h1>
-			<p><a href="` + *metricsPath + `">Metrics</a></p>
-			</body>
-			</html>`))
+		_, _ = w.Write([]byte(fmt.Sprintf(`<html>
+<head><title>Osquery Exporter</title></head>
+<body>
+<h1>Osquery Exporter</h1>
+<p><a href="%s">Metrics</a></p>
+</body>
+</html>`, *metricsPath)))
 	})
-	log.Infoln("Listening on", *listenAddress)
-	err = http.ListenAndServe(*listenAddress, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
 
+	log.Info("listening", "address", *listenAddress)
+	if err := http.ListenAndServe(*listenAddress, nil); err != nil {
+		log.Error("http server failed", "error", err)
+		os.Exit(1)
+	}
 }
