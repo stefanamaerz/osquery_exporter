@@ -73,7 +73,10 @@ func TestCollectorWithRealOsqueryd(t *testing.T) {
 			{Metric: model.Metric{Name: "osquery_info_up", Help: "up metric", Querystring: "SELECT 1 AS up FROM osquery_info", ValueIdentifier: "up"}},
 		},
 	}
-	c := collector.NewOsqueryCollector(r, m, infoLog())
+	c, err := collector.NewOsqueryCollector(r, m, infoLog())
+	if err != nil {
+		t.Fatalf("NewOsqueryCollector failed: %v", err)
+	}
 	ch := make(chan prometheus.Metric, 10)
 	go func() {
 		c.Collect(ch)

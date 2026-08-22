@@ -31,54 +31,51 @@ func (f *fakeRunner) Run(ctx context.Context, query string) (*model.OsqueryResul
 	return &model.OsqueryResult{Items: []model.OsqueryItem{}}, nil
 }
 
-func TestUpdateSingleValue(t *testing.T) {
+func TestEmitMetricsSuccess(t *testing.T) {
 	m := model.Counter{Metric: model.Metric{Name: "test", Help: "help", Querystring: "SELECT 1", ValueIdentifier: "count"}}
 	res := &model.OsqueryResult{
 		Items: []model.OsqueryItem{{"count": "7"}},
 	}
-	ch := make(chan prometheus.Metric, 1)
-	if err := update(m, res, ch); err != nil {
-		t.Fatalf("update failed: %v", err)
+	metrics, err := emitMetrics(m, res)
+	if err != nil {
+		t.Fatalf("emitMetrics failed: %v", err)
 	}
-	if len(ch) != 1 {
-		t.Fatalf("expected 1 metric, got %d", len(ch))
+	if len(metrics) != 1 {
+		t.Fatalf("expected 1 metric, got %d", len(metrics))
 	}
 }
 
-func TestUpdateMultiValueError(t *testing.T) {
+func TestEmitMetricsMultiValueError(t *testing.T) {
 	m := model.Counter{Metric: model.Metric{Name: "test", Help: "help", Querystring: "SELECT 1", ValueIdentifier: "count"}}
 	res := &model.OsqueryResult{
 		Items: []model.OsqueryItem{{"count": "1"}, {"count": "2"}},
 	}
-	ch := make(chan prometheus.Metric, 2)
-	if err := update(m, res, ch); err == nil {
+	if _, err := emitMetrics(m, res); err == nil {
 		t.Fatal("expected error for multi-row scalar metric")
 	}
 }
 
-func TestUpdateMissingValueKey(t *testing.T) {
+func TestEmitMetricsMissingValueKey(t *testing.T) {
 	m := model.Counter{Metric: model.Metric{Name: "test", Help: "help", Querystring: "SELECT 1", ValueIdentifier: "count"}}
 	res := &model.OsqueryResult{
 		Items: []model.OsqueryItem{{"wrong": "1"}},
 	}
-	ch := make(chan prometheus.Metric, 1)
-	if err := update(m, res, ch); err == nil {
+	if _, err := emitMetrics(m, res); err == nil {
 		t.Fatal("expected error for missing value key")
 	}
 }
 
-func TestUpdateNonNumericValue(t *testing.T) {
+func TestEmitMetricsNonNumericValue(t *testing.T) {
 	m := model.Counter{Metric: model.Metric{Name: "test", Help: "help", Querystring: "SELECT 1", ValueIdentifier: "count"}}
 	res := &model.OsqueryResult{
 		Items: []model.OsqueryItem{{"count": "abc"}},
 	}
-	ch := make(chan prometheus.Metric, 1)
-	if err := update(m, res, ch); err == nil {
+	if _, err := emitMetrics(m, res); err == nil {
 		t.Fatal("expected error for non-numeric value")
 	}
 }
 
-func TestUpdateMissingLabel(t *testing.T) {
+func TestEmitMetricsMissingLabel(t *testing.T) {
 	m := model.CounterVec{MetricVec: model.MetricVec{
 		Metric:          model.Metric{Name: "test", Help: "help", Querystring: "SELECT 1", ValueIdentifier: "count"},
 		LabelIdentifier: []string{"label"},
@@ -86,13 +83,12 @@ func TestUpdateMissingLabel(t *testing.T) {
 	res := &model.OsqueryResult{
 		Items: []model.OsqueryItem{{"count": "1"}},
 	}
-	ch := make(chan prometheus.Metric, 1)
-	if err := update(m, res, ch); err == nil {
+	if _, err := emitMetrics(m, res); err == nil {
 		t.Fatal("expected error for missing label")
 	}
 }
 
-func TestUpdateVec(t *testing.T) {
+func TestEmitMetricsVec(t *testing.T) {
 	m := model.CounterVec{MetricVec: model.MetricVec{
 		Metric:          model.Metric{Name: "test", Help: "help", Querystring: "SELECT 1", ValueIdentifier: "count"},
 		LabelIdentifier: []string{"label"},
@@ -103,12 +99,37 @@ func TestUpdateVec(t *testing.T) {
 			{"count": "2", "label": "b"},
 		},
 	}
-	ch := make(chan prometheus.Metric, 2)
-	if err := update(m, res, ch); err != nil {
-		t.Fatalf("update failed: %v", err)
+	metrics, err := emitMetrics(m, res)
+	if err != nil {
+		t.Fatalf("emitMetrics failed: %v", err)
 	}
-	if len(ch) != 2 {
-		t.Fatalf("expected 2 metrics, got %d", len(ch))
+	if len(metrics) != 2 {
+		t.Fatalf("expected 2 metrics, got %d", len(metrics))
+	}
+}
+
+func TestNewOsqueryCollectorDuplicateName(t *testing.T) {
+	m := model.Metrics{
+		Gauges: []model.Gauge{
+			{Metric: model.Metric{Name: "dup", Help: "first", Querystring: "SELECT 1", ValueIdentifier: "v"}},
+		},
+		Counters: []model.Counter{
+			{Metric: model.Metric{Name: "dup", Help: "second", Querystring: "SELECT 2", ValueIdentifier: "v"}},
+		},
+	}
+	if _, err := NewOsqueryCollector(&fakeRunner{}, m, discardLogger()); err == nil {
+		t.Fatal("expected error for duplicate metric name")
+	}
+}
+
+func TestNewOsqueryCollectorInvalidDescriptor(t *testing.T) {
+	m := model.Metrics{
+		Gauges: []model.Gauge{
+			{Metric: model.Metric{Name: "", Help: "empty", Querystring: "SELECT 1", ValueIdentifier: "v"}},
+		},
+	}
+	if _, err := NewOsqueryCollector(&fakeRunner{}, m, discardLogger()); err == nil {
+		t.Fatal("expected error for empty metric name")
 	}
 }
 
@@ -123,7 +144,10 @@ func TestCollectorCollectSuccess(t *testing.T) {
 			{Metric: model.Metric{Name: "ones", Help: "ones", Querystring: "SELECT 1", ValueIdentifier: "count"}},
 		},
 	}
-	c := NewOsqueryCollector(fr, m, discardLogger())
+	c, err := NewOsqueryCollector(fr, m, discardLogger())
+	if err != nil {
+		t.Fatalf("NewOsqueryCollector failed: %v", err)
+	}
 	ch := make(chan prometheus.Metric, 10)
 	go func() {
 		c.Collect(ch)
@@ -150,7 +174,10 @@ func TestCollectorCollectQueryError(t *testing.T) {
 			{Metric: model.Metric{Name: "boom", Help: "boom", Querystring: "SELECT boom", ValueIdentifier: "count"}},
 		},
 	}
-	c := NewOsqueryCollector(fr, m, discardLogger())
+	c, err := NewOsqueryCollector(fr, m, discardLogger())
+	if err != nil {
+		t.Fatalf("NewOsqueryCollector failed: %v", err)
+	}
 	ch := make(chan prometheus.Metric, 10)
 	go func() {
 		c.Collect(ch)
@@ -169,7 +196,10 @@ func TestCollectorCollectQueryError(t *testing.T) {
 
 func TestCollectorDescribe(t *testing.T) {
 	fr := &fakeRunner{}
-	c := NewOsqueryCollector(fr, model.Metrics{}, discardLogger())
+	c, err := NewOsqueryCollector(fr, model.Metrics{}, discardLogger())
+	if err != nil {
+		t.Fatalf("NewOsqueryCollector failed: %v", err)
+	}
 	ch := make(chan *prometheus.Desc, 10)
 	go func() {
 		c.Describe(ch)
