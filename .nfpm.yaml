@@ -1,4 +1,4 @@
-name: osquery_exporter
+name: osquery-exporter
 arch: amd64
 platform: linux
 version: ${VERSION}
@@ -17,11 +17,11 @@ contents:
     file_info:
       mode: 0755
   - src: README.md
-    dst: /usr/share/doc/osquery_exporter/README.md
+    dst: /usr/share/doc/osquery-exporter/README.md
     file_info:
       mode: 0644
   - src: changelog.Debian
-    dst: /usr/share/doc/osquery_exporter/changelog
+    dst: /usr/share/doc/osquery-exporter/changelog
     file_info:
       mode: 0644
     packager: deb
