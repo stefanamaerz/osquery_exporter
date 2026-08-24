@@ -95,3 +95,98 @@ func TestIdHexEncoded(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveQueryRefs(t *testing.T) {
+	ref := "shared"
+	config := Config{
+		Queries: []Query{
+			{Name: "shared", Query: "SELECT 1"},
+		},
+		Metrics: Metrics{
+			Gauges: []Gauge{
+				{Metric: Metric{Name: "a", Help: "h", Queryref: &ref, ValueIdentifier: "v"}},
+			},
+		},
+	}
+	if err := ResolveQueryRefs(&config); err != nil {
+		t.Fatalf("ResolveQueryRefs failed: %v", err)
+	}
+	if got := config.Metrics.Gauges[0].Querystring; got != "SELECT 1" {
+		t.Fatalf("resolved query = %q, want %q", got, "SELECT 1")
+	}
+}
+
+func TestResolveQueryRefsBackwardCompat(t *testing.T) {
+	config := Config{
+		Metrics: Metrics{
+			Gauges: []Gauge{
+				{Metric: Metric{Name: "a", Help: "h", Querystring: "SELECT 1", ValueIdentifier: "v"}},
+			},
+		},
+	}
+	if err := ResolveQueryRefs(&config); err != nil {
+		t.Fatalf("ResolveQueryRefs failed: %v", err)
+	}
+	if got := config.Metrics.Gauges[0].Querystring; got != "SELECT 1" {
+		t.Fatalf("query = %q, want %q", got, "SELECT 1")
+	}
+}
+
+func TestResolveQueryRefsMutualExclusion(t *testing.T) {
+	ref := "shared"
+	config := Config{
+		Queries: []Query{{Name: "shared", Query: "SELECT 1"}},
+		Metrics: Metrics{
+			Gauges: []Gauge{
+				{Metric: Metric{Name: "a", Help: "h", Querystring: "SELECT 2", Queryref: &ref, ValueIdentifier: "v"}},
+			},
+		},
+	}
+	if err := ResolveQueryRefs(&config); err == nil {
+		t.Fatal("expected error when query and queryref are both set")
+	}
+}
+
+func TestResolveQueryRefsUnknownRef(t *testing.T) {
+	ref := "missing"
+	config := Config{
+		Metrics: Metrics{
+			Gauges: []Gauge{
+				{Metric: Metric{Name: "a", Help: "h", Queryref: &ref, ValueIdentifier: "v"}},
+			},
+		},
+	}
+	if err := ResolveQueryRefs(&config); err == nil {
+		t.Fatal("expected error for unknown queryref")
+	}
+}
+
+func TestResolveQueryRefsDuplicateSharedName(t *testing.T) {
+	config := Config{
+		Queries: []Query{
+			{Name: "shared", Query: "SELECT 1"},
+			{Name: "shared", Query: "SELECT 2"},
+		},
+	}
+	if err := ResolveQueryRefs(&config); err == nil {
+		t.Fatal("expected error for duplicate shared query name")
+	}
+}
+
+func TestResolveQueryRefsEmptySharedName(t *testing.T) {
+	config := Config{
+		Queries: []Query{{Name: "", Query: "SELECT 1"}},
+	}
+	if err := ResolveQueryRefs(&config); err == nil {
+		t.Fatal("expected error for empty shared query name")
+	}
+}
+
+func TestResolveQueryRefsEmptySharedQuery(t *testing.T) {
+	config := Config{
+		Queries: []Query{{Name: "shared", Query: ""}},
+	}
+	if err := ResolveQueryRefs(&config); err == nil {
+		t.Fatal("expected error for empty shared query string")
+	}
+}

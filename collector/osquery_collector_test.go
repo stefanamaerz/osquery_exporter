@@ -276,6 +276,60 @@ func TestGatherPedantic(t *testing.T) {
 	}
 }
 
+type countingRunner struct {
+	fakeRunner
+	calls int
+}
+
+func (c *countingRunner) Run(ctx context.Context, query string) (*model.OsqueryResult, error) {
+	c.calls++
+	return c.fakeRunner.Run(ctx, query)
+}
+
+func TestCollectorDeduplicatesSharedQuery(t *testing.T) {
+	fr := &countingRunner{
+		fakeRunner: fakeRunner{
+			results: map[string]*model.OsqueryResult{
+				"SELECT shared": {Items: []model.OsqueryItem{
+					{"executions": "10", "output_size": "100"},
+				}, Runtime: time.Millisecond},
+			},
+		},
+	}
+	m := model.Metrics{
+		CounterVecs: []model.CounterVec{
+			{MetricVec: model.MetricVec{
+				Metric:          model.Metric{Name: "executions", Help: "h", Querystring: "SELECT shared", ValueIdentifier: "executions"},
+				LabelIdentifier: []string{},
+			}},
+			{MetricVec: model.MetricVec{
+				Metric:          model.Metric{Name: "output_size", Help: "h", Querystring: "SELECT shared", ValueIdentifier: "output_size"},
+				LabelIdentifier: []string{},
+			}},
+		},
+	}
+	c, err := NewOsqueryCollector(fr, m, discardLogger())
+	if err != nil {
+		t.Fatalf("NewOsqueryCollector failed: %v", err)
+	}
+	ch := make(chan prometheus.Metric, 10)
+	go func() {
+		c.Collect(ch)
+		close(ch)
+	}()
+
+	count := 0
+	for range ch {
+		count++
+	}
+	if fr.calls != 1 {
+		t.Fatalf("expected shared query to run once, got %d calls", fr.calls)
+	}
+	if count < 2 {
+		t.Fatalf("expected at least 2 metrics, got %d", count)
+	}
+}
+
 // TestGatherDuplicateLabelSetFailsSuccess asserts that a duplicate label set in
 // a vector result drives query_success to 0 through a real registry gather.
 func TestGatherDuplicateLabelSetFailsSuccess(t *testing.T) {
