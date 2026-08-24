@@ -36,30 +36,39 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
             go build -ldflags="-s -w" -o osquery_exporter .
 
-      - name: Install nFPM
-        env:
-          NFPM_VERSION: '2.42.0'
-        run: |
-          go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@v${NFPM_VERSION}"
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
       - name: Build .deb package
         id: deb
-        env:
-          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('0.0.0-{0}', github.sha) }}
         run: |
-          VERSION="${VERSION#v}"
-          echo "building version ${VERSION}"
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ -z "$VERSION" ] || [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            VERSION="0.0.0-${GITHUB_SHA::8}"
+          fi
+          PKGDIR="osquery-exporter_${VERSION}_amd64"
+          mkdir -p "${PKGDIR}/usr/bin"
+          mkdir -p "${PKGDIR}/usr/share/doc/osquery-exporter"
+          mkdir -p "${PKGDIR}/DEBIAN"
+          cp osquery_exporter "${PKGDIR}/usr/bin/"
+          cp README.md "${PKGDIR}/usr/share/doc/osquery-exporter/"
+          cat > "${PKGDIR}/DEBIAN/control" <<CONTROL
+          Package: osquery-exporter
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Stefan Maerz <104440170+stefanamaerz@users.noreply.github.com>
+          Description: Prometheus exporter for osquery query results
+           osquery_exporter runs osqueryi queries on each Prometheus scrape
+           and exposes the results as Prometheus metrics.
+          CONTROL
+          cat > "${PKGDIR}/usr/share/doc/osquery-exporter/changelog" <<CHANGELOG
+          osquery-exporter (${VERSION}) unstable; urgency=medium
 
-          mkdir -p dist
+            * Release ${VERSION}
 
-          printf 'osquery_exporter (%s) unstable; urgency=medium\n\n  * Release %s\n\n -- Stefan Maerz <104440170+stefanamaerz@users.noreply.github.com>  %s\n' \
-            "${VERSION}" "${VERSION}" "$(date -R)" > changelog.Debian
-
-          nfpm package --config .nfpm.yaml --packager deb --target dist/
-
-          deb_file=$(ls dist/*.deb | head -n 1)
-          echo "deb_file=${deb_file}" >> "$GITHUB_OUTPUT"
+           -- Stefan Maerz <104440170+stefanamaerz@users.noreply.github.com>  $(date -R)
+          CHANGELOG
+          dpkg-deb --build "${PKGDIR}"
+          echo "deb_file=${PKGDIR}.deb" >> "$GITHUB_OUTPUT"
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
