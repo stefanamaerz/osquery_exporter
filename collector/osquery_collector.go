@@ -84,11 +84,20 @@ func emitMetrics(sqc singleQueryCollector, result *model.OsqueryResult) ([]prome
 	return metrics, nil
 }
 
+// queryGroup is a set of metrics that share the same osquery SQL. Running the
+// query once produces a result that is fed to every metric in the group.
+type queryGroup struct {
+	query     string
+	metrics   []singleQueryCollector
+	resultset int
+}
+
 // OsqueryCollector represents a collector that collects metrics from a set of osquery queries. It implements
 // prometheus Collector
 type OsqueryCollector struct {
 	runner         Runner
 	collectors     map[string]singleQueryCollector
+	groups         map[string]*queryGroup
 	log            *slog.Logger
 	queryDurations *prometheus.SummaryVec
 	success        *prometheus.GaugeVec
@@ -109,6 +118,8 @@ var reservedNames = map[string]struct{}{
 // It fails fast if the config contains duplicate metric names or invalid metric descriptors.
 func NewOsqueryCollector(r Runner, m model.Metrics, log *slog.Logger) (*OsqueryCollector, error) {
 	collectors := make(map[string]singleQueryCollector)
+	groups := make(map[string]*queryGroup)
+
 	add := func(c singleQueryCollector) error {
 		name := c.String()
 		if name == "" {
@@ -130,6 +141,13 @@ func NewOsqueryCollector(r Runner, m model.Metrics, log *slog.Logger) (*OsqueryC
 			return fmt.Errorf("metric %q: invalid descriptor: %w", name, err)
 		}
 		collectors[name] = c
+
+		g, ok := groups[c.Query()]
+		if !ok {
+			g = &queryGroup{query: c.Query()}
+			groups[c.Query()] = g
+		}
+		g.metrics = append(g.metrics, c)
 		return nil
 	}
 
@@ -161,6 +179,7 @@ func NewOsqueryCollector(r Runner, m model.Metrics, log *slog.Logger) (*OsqueryC
 	return &OsqueryCollector{
 		runner:     r,
 		collectors: collectors,
+		groups:     groups,
 		log:        log,
 		queryDurations: prometheus.NewSummaryVec(
 			prometheus.SummaryOpts{
@@ -201,48 +220,58 @@ func (c *OsqueryCollector) Describe(ch chan<- *prometheus.Desc) {
 // Collect implements prometheus.Collector
 func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
 	wg := sync.WaitGroup{}
-	wg.Add(len(c.collectors))
-	for _, col := range c.collectors {
-		go func(col singleQueryCollector) {
-			defer func() {
-				if r := recover(); r != nil {
-					c.log.Error("collector panic", "metric", col.String(), "panic", r)
-					c.success.WithLabelValues(col.String()).Set(0.0)
-				}
-				wg.Done()
-			}()
+	wg.Add(len(c.groups))
+	for _, g := range c.groups {
+		go func(g *queryGroup) {
+			defer wg.Done()
 
 			begin := time.Now()
-			result, err := c.runner.Run(context.Background(), col.Query())
+			result, err := c.runner.Run(context.Background(), g.query)
 			if err != nil {
-				c.log.Error("failed to run query", "query", col.Query(), "error", err)
-				c.success.WithLabelValues(col.String()).Set(0.0)
-				c.resultsets.WithLabelValues(col.String()).Set(0.0)
-				c.queryDurations.WithLabelValues(col.String()).Observe(time.Since(begin).Seconds())
+				c.log.Error("failed to run query", "query", g.query, "error", err)
+				for _, col := range g.metrics {
+					c.success.WithLabelValues(col.String()).Set(0.0)
+					c.resultsets.WithLabelValues(col.String()).Set(0.0)
+					c.queryDurations.WithLabelValues(col.String()).Observe(time.Since(begin).Seconds())
+				}
 				return
 			}
 
-			metrics, err := emitMetrics(col, result)
-			if err != nil {
-				c.log.Warn("metric update error", "metric", col.String(), "error", err)
-				c.success.WithLabelValues(col.String()).Set(0.0)
-				c.resultsets.WithLabelValues(col.String()).Set(0.0)
-				c.queryDurations.WithLabelValues(col.String()).Observe(time.Since(begin).Seconds())
-				return
+			g.resultset = len(result.Items)
+			for _, col := range g.metrics {
+				c.collectFromResult(g, begin, col, result, ch)
 			}
-
-			for _, m := range metrics {
-				ch <- m
-			}
-
-			c.log.Debug("query finished", "metric", col.String(), "duration", result.Runtime)
-			c.resultsets.WithLabelValues(col.String()).Set(float64(len(result.Items)))
-			c.queryDurations.WithLabelValues(col.String()).Observe(result.Runtime.Seconds())
-			c.success.WithLabelValues(col.String()).Set(1.0)
-		}(col)
+		}(g)
 	}
 	wg.Wait()
 	c.queryDurations.Collect(ch)
 	c.success.Collect(ch)
 	c.resultsets.Collect(ch)
+}
+
+func (c *OsqueryCollector) collectFromResult(g *queryGroup, begin time.Time, col singleQueryCollector, result *model.OsqueryResult, ch chan<- prometheus.Metric) {
+	defer func() {
+		if r := recover(); r != nil {
+			c.log.Error("collector panic", "metric", col.String(), "panic", r)
+			c.success.WithLabelValues(col.String()).Set(0.0)
+		}
+	}()
+
+	metrics, err := emitMetrics(col, result)
+	if err != nil {
+		c.log.Warn("metric update error", "metric", col.String(), "error", err)
+		c.success.WithLabelValues(col.String()).Set(0.0)
+		c.resultsets.WithLabelValues(col.String()).Set(0.0)
+		c.queryDurations.WithLabelValues(col.String()).Observe(time.Since(begin).Seconds())
+		return
+	}
+
+	for _, m := range metrics {
+		ch <- m
+	}
+
+	c.log.Debug("query finished", "metric", col.String(), "duration", result.Runtime)
+	c.resultsets.WithLabelValues(col.String()).Set(float64(g.resultset))
+	c.queryDurations.WithLabelValues(col.String()).Observe(result.Runtime.Seconds())
+	c.success.WithLabelValues(col.String()).Set(1.0)
 }

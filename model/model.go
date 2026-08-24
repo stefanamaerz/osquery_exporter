@@ -3,6 +3,7 @@ package model
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"fmt"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -13,6 +14,7 @@ const namespace = "osquery_exporter"
 // Config represents a osquery_exporter configuration
 type Config struct {
 	OsQueryRuntime OsQueryRuntime `yaml:"runtime"`
+	Queries        []Query        `yaml:"queries"`
 	Metrics        Metrics        `yaml:"metrics"`
 }
 
@@ -20,6 +22,13 @@ type Config struct {
 type OsQueryRuntime struct {
 	SocketPath string `yaml:"socket_path"`
 	Timeout    string `yaml:"timeout"`
+}
+
+// Query defines a shared, named osquery SQL statement that can be referenced
+// from multiple metrics via queryref.
+type Query struct {
+	Name  string `yaml:"name"`
+	Query string `yaml:"query"`
 }
 
 // Metrics holds the metric definitions that are converted to prometheus metrics
@@ -32,10 +41,11 @@ type Metrics struct {
 
 // Metric represents a basic osquery_exporter metric definition
 type Metric struct {
-	Name            string `yaml:"name"`
-	Help            string `yaml:"help"`
-	Querystring     string `yaml:"query"`
-	ValueIdentifier string `yaml:"valueidentifier"`
+	Name            string  `yaml:"name"`
+	Help            string  `yaml:"help"`
+	Querystring     string  `yaml:"query"`
+	Queryref        *string `yaml:"queryref"`
+	ValueIdentifier string  `yaml:"valueidentifier"`
 }
 
 // String() implements the Stringer interface and the collector.singleQueryCollector
@@ -170,4 +180,65 @@ type OsqueryResult struct {
 func id(s string) string {
 	sum := md5.Sum([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// ResolveQueryRefs resolves every metric's queryref against the named queries
+// in config.Queries. It mutates the metric definitions in place, copying the
+// referenced query into Querystring, and validates that query and queryref are
+// mutually exclusive.
+func ResolveQueryRefs(config *Config) error {
+	refs := make(map[string]string, len(config.Queries))
+	for _, q := range config.Queries {
+		if q.Name == "" {
+			return fmt.Errorf("shared query name cannot be empty")
+		}
+		if q.Query == "" {
+			return fmt.Errorf("shared query %q: query cannot be empty", q.Name)
+		}
+		if _, dup := refs[q.Name]; dup {
+			return fmt.Errorf("duplicate shared query name %q", q.Name)
+		}
+		refs[q.Name] = q.Query
+	}
+
+	resolve := func(name string, query *string, queryref *string) error {
+		if queryref != nil {
+			if *query != "" {
+				return fmt.Errorf("metric %q: query and queryref are mutually exclusive", name)
+			}
+			resolved, ok := refs[*queryref]
+			if !ok {
+				return fmt.Errorf("metric %q: unknown queryref %q", name, *queryref)
+			}
+			*query = resolved
+		}
+		return nil
+	}
+
+	for i := range config.Metrics.Counters {
+		m := &config.Metrics.Counters[i].Metric
+		if err := resolve(m.Name, &m.Querystring, m.Queryref); err != nil {
+			return err
+		}
+	}
+	for i := range config.Metrics.CounterVecs {
+		m := &config.Metrics.CounterVecs[i].Metric
+		if err := resolve(m.Name, &m.Querystring, m.Queryref); err != nil {
+			return err
+		}
+	}
+	for i := range config.Metrics.Gauges {
+		m := &config.Metrics.Gauges[i].Metric
+		if err := resolve(m.Name, &m.Querystring, m.Queryref); err != nil {
+			return err
+		}
+	}
+	for i := range config.Metrics.GaugeVecs {
+		m := &config.Metrics.GaugeVecs[i].Metric
+		if err := resolve(m.Name, &m.Querystring, m.Queryref); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

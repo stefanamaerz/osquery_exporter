@@ -50,6 +50,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := model.ResolveQueryRefs(&config); err != nil {
+		log.Error("invalid metric configuration", "error", err)
+		os.Exit(1)
+	}
+
 	log.Info("connecting to osqueryd", "socket_path", config.OsQueryRuntime.SocketPath, "timeout", config.OsQueryRuntime.Timeout)
 	runner, err := osquery.NewThriftRunner(config.OsQueryRuntime.SocketPath, config.OsQueryRuntime.Timeout, log)
 	if err != nil {
