@@ -87,9 +87,8 @@ func emitMetrics(sqc singleQueryCollector, result *model.OsqueryResult) ([]prome
 // queryGroup is a set of metrics that share the same osquery SQL. Running the
 // query once produces a result that is fed to every metric in the group.
 type queryGroup struct {
-	query     string
-	metrics   []singleQueryCollector
-	resultset int
+	query   string
+	metrics []singleQueryCollector
 }
 
 // OsqueryCollector represents a collector that collects metrics from a set of osquery queries. It implements
@@ -237,9 +236,9 @@ func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
 				return
 			}
 
-			g.resultset = len(result.Items)
+			resultset := len(result.Items)
 			for _, col := range g.metrics {
-				c.collectFromResult(g, begin, col, result, ch)
+				c.collectFromResult(begin, col, result, resultset, ch)
 			}
 		}(g)
 	}
@@ -249,7 +248,7 @@ func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
 	c.resultsets.Collect(ch)
 }
 
-func (c *OsqueryCollector) collectFromResult(g *queryGroup, begin time.Time, col singleQueryCollector, result *model.OsqueryResult, ch chan<- prometheus.Metric) {
+func (c *OsqueryCollector) collectFromResult(begin time.Time, col singleQueryCollector, result *model.OsqueryResult, resultset int, ch chan<- prometheus.Metric) {
 	defer func() {
 		if r := recover(); r != nil {
 			c.log.Error("collector panic", "metric", col.String(), "panic", r)
@@ -271,7 +270,7 @@ func (c *OsqueryCollector) collectFromResult(g *queryGroup, begin time.Time, col
 	}
 
 	c.log.Debug("query finished", "metric", col.String(), "duration", result.Runtime)
-	c.resultsets.WithLabelValues(col.String()).Set(float64(g.resultset))
+	c.resultsets.WithLabelValues(col.String()).Set(float64(resultset))
 	c.queryDurations.WithLabelValues(col.String()).Observe(result.Runtime.Seconds())
 	c.success.WithLabelValues(col.String()).Set(1.0)
 }

@@ -69,6 +69,7 @@ queries:
   - name: osquery-info
     query: |
       SELECT
+        1 AS value,
         start_time,
         config_valid,
         CASE WHEN extensions = 'active' THEN 1 ELSE 0 END AS extensions_active,
@@ -242,7 +243,7 @@ metrics:
     - name: osquery_info
       help: Constant 1 labeled with osquery version, build platform, and build distro.
       queryref: osquery-info
-      valueidentifier: extensions_active
+      valueidentifier: value
       labelidentifier:
         - version
         - build_platform
