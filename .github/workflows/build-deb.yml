@@ -55,6 +55,7 @@ jobs:
           Section: utils
           Priority: optional
           Architecture: amd64
+          Depends: osquery
           Maintainer: Stefan Maerz <104440170+stefanamaerz@users.noreply.github.com>
           Description: Prometheus exporter for osquery query results
            osquery_exporter runs osqueryi queries on each Prometheus scrape
