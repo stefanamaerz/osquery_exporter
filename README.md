@@ -8,6 +8,13 @@ This is a fork of the original `zwopir/osquery_exporter` prototype, modernized f
 
 Install osquery from <https://osquery.io/downloads/>.
 
+Pre-built `.deb` packages are available on the [Releases](https://github.com/stefanamaerz/osquery_exporter/releases) page for both `amd64` and `arm64`:
+
+```bash
+# Replace <arch> with amd64 or arm64 and <version> with the release tag (without the leading v).
+dpkg -i osquery-exporter_<version>_<arch>.deb
+```
+
 Build requires Go 1.27 or later:
 
 ```bash
