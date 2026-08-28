@@ -37,7 +37,7 @@ jobs:
       - name: Build binary
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} \
-            go build -ldflags="-s -w" -o osquery_exporter .
+            go build -ldflags="-s -w -X github.com/stefanamaerz/osquery_exporter/version.Version=${GITHUB_REF_NAME}" -o osquery_exporter .
 
       - name: Build .deb package
         id: deb
