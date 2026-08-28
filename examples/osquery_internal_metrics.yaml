@@ -238,8 +238,7 @@ metrics:
         - version
         - sdk_version
 
-  gauges:
-    # osquery_info — single-row process identity and health
+    # osquery_info — process identity and health, labeled by version/platform.
     - name: osquery_info
       help: Constant 1 labeled with osquery version, build platform, and build distro.
       queryref: osquery-info
@@ -249,6 +248,7 @@ metrics:
         - build_platform
         - build_distro
 
+  gauges:
     - name: osquery_start_time_seconds
       help: UNIX timestamp when osqueryd started.
       queryref: osquery-info
