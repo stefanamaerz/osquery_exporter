@@ -59,5 +59,6 @@ metrics:
 # osquery_exporter_query_duration_seconds
 # osquery_exporter_query_success
 # osquery_exporter_resultsets
+# osquery_exporter_query_executions_total
 # osquery_exporter_query_cache_hits_total
 # osquery_exporter_query_cache_misses_total

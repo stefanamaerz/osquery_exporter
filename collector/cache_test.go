@@ -26,29 +26,68 @@ func TestCacheReturnsMissThenHit(t *testing.T) {
 		return &model.OsqueryResult{Items: []model.OsqueryItem{{"v": "1"}}}, nil
 	}
 
-	res, hit, err := cache.runOrWait(context.Background(), "q", 10*time.Second, fetch)
+	res, hit, executed, err := cache.runOrWait(context.Background(), "q", 10*time.Second, fetch)
 	if err != nil {
 		t.Fatalf("first call failed: %v", err)
 	}
 	if hit {
 		t.Fatal("first call should be a cache miss")
 	}
+	if !executed {
+		t.Fatal("first call should be the leader")
+	}
 	if calls != 1 {
 		t.Fatalf("expected 1 fetch call, got %d", calls)
 	}
 
-	res2, hit2, err := cache.runOrWait(context.Background(), "q", 10*time.Second, fetch)
+	res2, hit2, executed2, err := cache.runOrWait(context.Background(), "q", 10*time.Second, fetch)
 	if err != nil {
 		t.Fatalf("second call failed: %v", err)
 	}
 	if !hit2 {
 		t.Fatal("second call should be a cache hit")
 	}
+	if executed2 {
+		t.Fatal("second call should not execute")
+	}
 	if calls != 1 {
 		t.Fatalf("expected still 1 fetch call, got %d", calls)
 	}
 	if len(res2.Items) != len(res.Items) {
 		t.Fatal("cached result mismatch")
+	}
+}
+
+func TestCacheErrorsAreBrieflyCached(t *testing.T) {
+	cache := newQueryCache()
+	calls := 0
+	wantErr := errors.New("boom")
+	fetch := func(context.Context) (*model.OsqueryResult, error) {
+		calls++
+		return nil, wantErr
+	}
+
+	_, hit, executed, err := cache.runOrWait(context.Background(), "q", 10*time.Second, fetch)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected error %v, got %v", wantErr, err)
+	}
+	if hit {
+		t.Fatal("first call should be a miss")
+	}
+	if !executed {
+		t.Fatal("first call should be the leader")
+	}
+
+	// A second call immediately after should see the cached error without re-executing.
+	_, _, executed2, err := cache.runOrWait(context.Background(), "q", 10*time.Second, fetch)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected cached error %v, got %v", wantErr, err)
+	}
+	if executed2 {
+		t.Fatal("second call should not re-execute")
+	}
+	if calls != 1 {
+		t.Fatalf("expected 1 fetch call, got %d", calls)
 	}
 }
 
@@ -60,11 +99,11 @@ func TestCacheExpires(t *testing.T) {
 		return &model.OsqueryResult{Items: []model.OsqueryItem{{"v": "1"}}}, nil
 	}
 
-	if _, _, err := cache.runOrWait(context.Background(), "q", 50*time.Millisecond, fetch); err != nil {
+	if _, _, _, err := cache.runOrWait(context.Background(), "q", 50*time.Millisecond, fetch); err != nil {
 		t.Fatalf("first call failed: %v", err)
 	}
 	time.Sleep(60 * time.Millisecond)
-	_, hit, err := cache.runOrWait(context.Background(), "q", 50*time.Millisecond, fetch)
+	_, hit, _, err := cache.runOrWait(context.Background(), "q", 50*time.Millisecond, fetch)
 	if err != nil {
 		t.Fatalf("expired call failed: %v", err)
 	}
@@ -83,7 +122,7 @@ func TestCachePropagatesError(t *testing.T) {
 		return nil, wantErr
 	}
 
-	_, _, err := cache.runOrWait(context.Background(), "q", 10*time.Second, fetch)
+	_, _, _, err := cache.runOrWait(context.Background(), "q", 10*time.Second, fetch)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected error %v, got %v", wantErr, err)
 	}
@@ -104,7 +143,7 @@ func TestCacheConcurrentColdCacheSingleFetch(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, err := cache.runOrWait(context.Background(), "q", 10*time.Second, fetch)
+			_, _, _, err := cache.runOrWait(context.Background(), "q", 10*time.Second, fetch)
 			if err != nil {
 				t.Errorf("concurrent call failed: %v", err)
 			}
@@ -131,7 +170,7 @@ func TestCacheFetchCancelledByContext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
-	_, _, err := cache.runOrWait(ctx, "q", 10*time.Second, fetch)
+	_, _, _, err := cache.runOrWait(ctx, "q", 10*time.Second, fetch)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected DeadlineExceeded, got %v", err)
 	}

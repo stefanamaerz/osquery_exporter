@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -209,8 +210,8 @@ func TestCollectorDescribe(t *testing.T) {
 	for range ch {
 		count++
 	}
-	if count != 5 {
-		t.Fatalf("expected 5 descriptors, got %d", count)
+	if count != 6 {
+		t.Fatalf("expected 6 descriptors, got %d", count)
 	}
 }
 
@@ -278,11 +279,11 @@ func TestGatherPedantic(t *testing.T) {
 
 type countingRunner struct {
 	fakeRunner
-	calls int
+	calls atomic.Int32
 }
 
 func (c *countingRunner) Run(ctx context.Context, query string) (*model.OsqueryResult, error) {
-	c.calls++
+	c.calls.Add(1)
 	return c.fakeRunner.Run(ctx, query)
 }
 
@@ -322,8 +323,8 @@ func TestCollectorDeduplicatesSharedQuery(t *testing.T) {
 	for range ch {
 		count++
 	}
-	if fr.calls != 1 {
-		t.Fatalf("expected shared query to run once, got %d calls", fr.calls)
+	if fr.calls.Load() != 1 {
+		t.Fatalf("expected shared query to run once, got %d calls", fr.calls.Load())
 	}
 	if count < 2 {
 		t.Fatalf("expected at least 2 metrics, got %d", count)

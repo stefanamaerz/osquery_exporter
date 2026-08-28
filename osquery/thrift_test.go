@@ -17,8 +17,8 @@ func discardLogger() *slog.Logger {
 }
 
 type fakeThriftQuerier struct {
-	resp   *osquerygen.ExtensionResponse
-	err    error
+	resp    *osquerygen.ExtensionResponse
+	err     error
 	queries int32
 	closes  int32
 }
