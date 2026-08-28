@@ -1,7 +1,7 @@
 package model
 
 import (
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"time"
@@ -70,7 +70,7 @@ func (m Metric) Query() string {
 
 // Id() implements the collector.singleQueryCollector interface.
 // It returns a unique ID of a metric definition. Metrics are considered unique, if the
-// md5 sum of the querystring is unique
+// sha256 sum of the querystring is unique
 func (m Metric) Id() string {
 	return id(m.Querystring)
 }
@@ -178,7 +178,7 @@ type OsqueryResult struct {
 }
 
 func id(s string) string {
-	sum := md5.Sum([]byte(s))
+	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
 

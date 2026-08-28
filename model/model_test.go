@@ -86,8 +86,8 @@ func TestIdDeterministic(t *testing.T) {
 
 func TestIdHexEncoded(t *testing.T) {
 	got := id("SELECT 1")
-	if len(got) != 32 {
-		t.Fatalf("id length = %d, want 32 hex chars", len(got))
+	if len(got) != 64 {
+		t.Fatalf("id length = %d, want 64 hex chars", len(got))
 	}
 	for _, r := range got {
 		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
