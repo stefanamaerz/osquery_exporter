@@ -130,6 +130,8 @@ type OsqueryCollector struct {
 	executions       *prometheus.CounterVec
 	cacheHits        *prometheus.CounterVec
 	cacheMisses      *prometheus.CounterVec
+	shutdownCtxMu    sync.RWMutex
+	shutdownCtx      context.Context
 }
 
 // NewOsqueryCollectorOptions contains optional arguments for NewOsqueryCollector.
@@ -247,6 +249,7 @@ func NewOsqueryCollector(r Runner, m model.Metrics, log *slog.Logger, opts ...Ne
 		defaultCacheTTL:  opt.DefaultCacheTTL,
 		maxScrapeTimeout: opt.MaxScrapeTimeout,
 		log:              log,
+		shutdownCtx:      context.Background(),
 		queryDurations: prometheus.NewSummaryVec(
 			prometheus.SummaryOpts{
 				Namespace: "osquery_exporter",
@@ -310,9 +313,23 @@ func (c *OsqueryCollector) Describe(ch chan<- *prometheus.Desc) {
 	c.cacheMisses.Describe(ch)
 }
 
+// ShutdownContext sets the parent context used for all subsequent scrapes.
+// Cancelling it aborts in-flight osquery queries safely because the underlying
+// Thrift client respects context cancellation and the runner only reconnects
+// on transport errors, not on context cancellation.
+func (c *OsqueryCollector) ShutdownContext(ctx context.Context) {
+	c.shutdownCtxMu.Lock()
+	defer c.shutdownCtxMu.Unlock()
+	c.shutdownCtx = ctx
+}
+
 // Collect implements prometheus.Collector
 func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.maxScrapeTimeout)
+	c.shutdownCtxMu.RLock()
+	parentCtx := c.shutdownCtx
+	c.shutdownCtxMu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(parentCtx, c.maxScrapeTimeout)
 	defer cancel()
 
 	wg := sync.WaitGroup{}

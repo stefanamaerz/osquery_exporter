@@ -277,6 +277,62 @@ func TestGatherPedantic(t *testing.T) {
 	}
 }
 
+type blockingRunner struct {
+	started chan struct{}
+}
+
+func (b *blockingRunner) Run(ctx context.Context, query string) (*model.OsqueryResult, error) {
+	close(b.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestCollectorShutdownContextCancelsInFlightQuery(t *testing.T) {
+	br := &blockingRunner{started: make(chan struct{})}
+	m := model.Metrics{
+		Counters: []model.Counter{
+			{Metric: model.Metric{Name: "ones", Help: "ones", Querystring: "SELECT 1", ValueIdentifier: "count"}},
+		},
+	}
+	c, err := NewOsqueryCollector(br, m, discardLogger())
+	if err != nil {
+		t.Fatalf("NewOsqueryCollector failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c.ShutdownContext(ctx)
+
+	ch := make(chan prometheus.Metric, 10)
+	done := make(chan struct{})
+	go func() {
+		c.Collect(ch)
+		close(done)
+	}()
+
+	select {
+	case <-br.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("query did not start")
+	}
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("collect did not finish after shutdown context cancelled")
+	}
+
+	close(ch)
+	count := 0
+	for range ch {
+		count++
+	}
+	if count == 0 {
+		t.Fatal("expected internal metrics after cancellation")
+	}
+}
+
 type countingRunner struct {
 	fakeRunner
 	calls atomic.Int32
