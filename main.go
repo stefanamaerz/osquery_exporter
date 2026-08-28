@@ -22,6 +22,21 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// parseCacheTTL parses a cache_ttl string. An empty string disables caching.
+func parseCacheTTL(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	ttl, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, err
+	}
+	if ttl < 0 {
+		return 0, fmt.Errorf("negative duration %v", ttl)
+	}
+	return ttl, nil
+}
+
 func main() {
 	var (
 		configFile             = flag.String("config.file", "config.yaml", "Config file")
@@ -52,6 +67,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	defaultCacheTTL, err := parseCacheTTL(config.OsQueryRuntime.CacheTTL)
+	if err != nil {
+		log.Error("invalid runtime.cache_ttl", "value", config.OsQueryRuntime.CacheTTL, "error", err)
+		os.Exit(1)
+	}
+
 	if config.OsQueryRuntime.SocketPath == "" {
 		log.Error("missing required runtime.socket_path")
 		os.Exit(1)
@@ -70,7 +91,9 @@ func main() {
 	}
 	defer runner.Close()
 
-	c, err := collector.NewOsqueryCollector(runner, config.Metrics, log)
+	c, err := collector.NewOsqueryCollector(runner, config.Metrics, log, collector.NewOsqueryCollectorOptions{
+		DefaultCacheTTL: defaultCacheTTL,
+	})
 	if err != nil {
 		log.Error("invalid metric configuration", "error", err)
 		os.Exit(1)

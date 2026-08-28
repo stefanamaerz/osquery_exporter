@@ -134,13 +134,31 @@ metrics:
 - <https://prometheus.io/docs/concepts/metric_types/>
 - <https://prometheus.io/docs/practices/naming/>
 
+### Caching query results
+
+Frequent Prometheus scrapes can generate excessive osqueryd load because every scrape currently runs every query. Set `runtime.cache_ttl` to cache each query's result for the configured duration:
+
+```yaml
+runtime:
+  socket_path: "/var/run/osquery/osquery.em"
+  timeout: 10s
+  cache_ttl: 30s
+```
+
+Use `cache_ttl: 0` or omit the key to disable caching (the default behavior).
+
+On cache hits, the exporter still emits `query_success` and `resultsets` from the cached result so Prometheus series remain stable, while `query_duration_seconds` is observed only on actual osquery executions. If osquery fails while the cached entry is expired, the scrape fails as usual; stale results are not served.
+
 ### Implicit exporter metrics
 
 In addition to metrics defined in the config, the exporter exposes:
 
-- `osquery_exporter_query_duration_seconds{name="..."}` — query execution duration summary.
+- `osquery_exporter_query_duration_seconds{name="..."}` — query execution duration summary (recorded only on real executions).
 - `osquery_exporter_query_success{name="..."}` — `1` success, `0` error.
 - `osquery_exporter_resultsets{name="..."}` — number of result rows per defined query.
+- `osquery_exporter_query_executions_total{name="..."}` — number of actual osquery executions.
+- `osquery_exporter_query_cache_hits_total{name="..."}` — number of cache hits per query.
+- `osquery_exporter_query_cache_misses_total{name="..."}` — number of cache misses per query.
 
 ## Development
 

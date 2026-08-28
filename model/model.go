@@ -22,13 +22,15 @@ type Config struct {
 type OsQueryRuntime struct {
 	SocketPath string `yaml:"socket_path"`
 	Timeout    string `yaml:"timeout"`
+	CacheTTL   string `yaml:"cache_ttl"`
 }
 
 // Query defines a shared, named osquery SQL statement that can be referenced
 // from multiple metrics via queryref.
 type Query struct {
-	Name  string `yaml:"name"`
-	Query string `yaml:"query"`
+	Name     string `yaml:"name"`
+	Query    string `yaml:"query"`
+	CacheTTL string `yaml:"cache_ttl"`
 }
 
 // Metrics holds the metric definitions that are converted to prometheus metrics
@@ -46,6 +48,7 @@ type Metric struct {
 	Querystring     string  `yaml:"query"`
 	Queryref        *string `yaml:"queryref"`
 	ValueIdentifier string  `yaml:"valueidentifier"`
+	CacheTTL        string  `yaml:"cache_ttl"`
 }
 
 // String() implements the Stringer interface and the collector.singleQueryCollector
@@ -188,6 +191,7 @@ func id(s string) string {
 // mutually exclusive.
 func ResolveQueryRefs(config *Config) error {
 	refs := make(map[string]string, len(config.Queries))
+	cacheTTLs := make(map[string]string, len(config.Queries))
 	for _, q := range config.Queries {
 		if q.Name == "" {
 			return fmt.Errorf("shared query name cannot be empty")
@@ -199,9 +203,10 @@ func ResolveQueryRefs(config *Config) error {
 			return fmt.Errorf("duplicate shared query name %q", q.Name)
 		}
 		refs[q.Name] = q.Query
+		cacheTTLs[q.Name] = q.CacheTTL
 	}
 
-	resolve := func(name string, query *string, queryref *string) error {
+	resolve := func(name string, query *string, queryref *string, cacheTTL *string) error {
 		if queryref != nil {
 			if *query != "" {
 				return fmt.Errorf("metric %q: query and queryref are mutually exclusive", name)
@@ -211,31 +216,32 @@ func ResolveQueryRefs(config *Config) error {
 				return fmt.Errorf("metric %q: unknown queryref %q", name, *queryref)
 			}
 			*query = resolved
+			*cacheTTL = cacheTTLs[*queryref]
 		}
 		return nil
 	}
 
 	for i := range config.Metrics.Counters {
 		m := &config.Metrics.Counters[i].Metric
-		if err := resolve(m.Name, &m.Querystring, m.Queryref); err != nil {
+		if err := resolve(m.Name, &m.Querystring, m.Queryref, &m.CacheTTL); err != nil {
 			return err
 		}
 	}
 	for i := range config.Metrics.CounterVecs {
 		m := &config.Metrics.CounterVecs[i].Metric
-		if err := resolve(m.Name, &m.Querystring, m.Queryref); err != nil {
+		if err := resolve(m.Name, &m.Querystring, m.Queryref, &m.CacheTTL); err != nil {
 			return err
 		}
 	}
 	for i := range config.Metrics.Gauges {
 		m := &config.Metrics.Gauges[i].Metric
-		if err := resolve(m.Name, &m.Querystring, m.Queryref); err != nil {
+		if err := resolve(m.Name, &m.Querystring, m.Queryref, &m.CacheTTL); err != nil {
 			return err
 		}
 	}
 	for i := range config.Metrics.GaugeVecs {
 		m := &config.Metrics.GaugeVecs[i].Metric
-		if err := resolve(m.Name, &m.Querystring, m.Queryref); err != nil {
+		if err := resolve(m.Name, &m.Querystring, m.Queryref, &m.CacheTTL); err != nil {
 			return err
 		}
 	}
