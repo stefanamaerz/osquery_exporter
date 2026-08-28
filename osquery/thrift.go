@@ -62,6 +62,10 @@ func NewThriftRunner(socketPath, timeout string, log *slog.Logger) (*ThriftRunne
 		return nil, fmt.Errorf("can't parse timeout for thrift runner: %w", err)
 	}
 
+	if err := validateSocketPath(socketPath); err != nil {
+		return nil, err
+	}
+
 	r := &ThriftRunner{
 		socketPath: socketPath,
 		timeout:    to,
