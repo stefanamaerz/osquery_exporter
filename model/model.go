@@ -22,6 +22,7 @@ type Config struct {
 type OsQueryRuntime struct {
 	SocketPath string `yaml:"socket_path"`
 	Timeout    string `yaml:"timeout"`
+	CacheTTL   string `yaml:"cache_ttl"`
 }
 
 // Query defines a shared, named osquery SQL statement that can be referenced

@@ -209,8 +209,8 @@ func TestCollectorDescribe(t *testing.T) {
 	for range ch {
 		count++
 	}
-	if count != 3 {
-		t.Fatalf("expected 3 descriptors, got %d", count)
+	if count != 5 {
+		t.Fatalf("expected 5 descriptors, got %d", count)
 	}
 }
 

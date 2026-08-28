@@ -4,6 +4,10 @@ runtime:
   socket_path: "/var/run/osquery/osquery.em"
   # Per-query timeout. This bounds both socket wait time and query execution.
   timeout: 10s
+  # Optional: cache query results for this duration. A value of 0 disables
+  # caching (the default). Metrics derived from slowly-changing data benefit
+  # most from caching; frequent scrapes then do not hit osqueryd on every pull.
+  # cache_ttl: 30s
 
 metrics:
   # NOTE: counters must be monotonically increasing values. Most osquery
@@ -40,7 +44,20 @@ metrics:
       labelidentifier:
         - shell
 
+## Shared named queries. Define the SQL once and reference it from multiple
+## metrics with queryref.
+# queries:
+#   - name: osquery-schedule
+#     query: |
+#       SELECT
+#         name,
+#         executions,
+#         output_size
+#       FROM osquery_schedule
+
 ## implicit metrics
 # osquery_exporter_query_duration_seconds
 # osquery_exporter_query_success
 # osquery_exporter_resultsets
+# osquery_exporter_query_cache_hits_total
+# osquery_exporter_query_cache_misses_total

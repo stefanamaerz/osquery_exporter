@@ -70,7 +70,15 @@ func main() {
 	}
 	defer runner.Close()
 
-	c, err := collector.NewOsqueryCollector(runner, config.Metrics, log)
+	defaultCacheTTL, err := time.ParseDuration(config.OsQueryRuntime.CacheTTL)
+	if err != nil {
+		log.Error("invalid runtime.cache_ttl", "value", config.OsQueryRuntime.CacheTTL, "error", err)
+		os.Exit(1)
+	}
+
+	c, err := collector.NewOsqueryCollector(runner, config.Metrics, log, collector.NewOsqueryCollectorOptions{
+		DefaultCacheTTL: defaultCacheTTL,
+	})
 	if err != nil {
 		log.Error("invalid metric configuration", "error", err)
 		os.Exit(1)

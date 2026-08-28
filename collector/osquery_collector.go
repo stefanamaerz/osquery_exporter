@@ -94,13 +94,17 @@ type queryGroup struct {
 // OsqueryCollector represents a collector that collects metrics from a set of osquery queries. It implements
 // prometheus Collector
 type OsqueryCollector struct {
-	runner         Runner
-	collectors     map[string]singleQueryCollector
-	groups         map[string]*queryGroup
-	log            *slog.Logger
-	queryDurations *prometheus.SummaryVec
-	success        *prometheus.GaugeVec
-	resultsets     *prometheus.GaugeVec
+	runner          Runner
+	collectors      map[string]singleQueryCollector
+	groups          map[string]*queryGroup
+	cache           *queryCache
+	defaultCacheTTL time.Duration
+	log             *slog.Logger
+	queryDurations  *prometheus.SummaryVec
+	success         *prometheus.GaugeVec
+	resultsets      *prometheus.GaugeVec
+	cacheHits       *prometheus.CounterVec
+	cacheMisses     *prometheus.CounterVec
 }
 
 // reservedNames are the exporter's internal metric names. A config metric with
@@ -108,14 +112,21 @@ type OsqueryCollector struct {
 // prometheus.MustRegister with an opaque message, so reject it at construction
 // with a readable error instead.
 var reservedNames = map[string]struct{}{
-	"query_duration_seconds": {},
-	"query_success":          {},
-	"resultsets":             {},
+	"query_duration_seconds":   {},
+	"query_success":            {},
+	"resultsets":               {},
+	"query_cache_hits_total":   {},
+	"query_cache_misses_total": {},
+}
+
+// NewOsqueryCollectorOptions contains optional arguments for NewOsqueryCollector.
+type NewOsqueryCollectorOptions struct {
+	DefaultCacheTTL time.Duration
 }
 
 // NewOsqueryCollector creates an OsQueryCollector from a given osquery-runner and a set of metric definitions.
 // It fails fast if the config contains duplicate metric names or invalid metric descriptors.
-func NewOsqueryCollector(r Runner, m model.Metrics, log *slog.Logger) (*OsqueryCollector, error) {
+func NewOsqueryCollector(r Runner, m model.Metrics, log *slog.Logger, opts ...NewOsqueryCollectorOptions) (*OsqueryCollector, error) {
 	collectors := make(map[string]singleQueryCollector)
 	groups := make(map[string]*queryGroup)
 
@@ -175,11 +186,18 @@ func NewOsqueryCollector(r Runner, m model.Metrics, log *slog.Logger) (*OsqueryC
 		}
 	}
 
+	opt := NewOsqueryCollectorOptions{}
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
 	return &OsqueryCollector{
-		runner:     r,
-		collectors: collectors,
-		groups:     groups,
-		log:        log,
+		runner:          r,
+		collectors:      collectors,
+		groups:          groups,
+		cache:           newQueryCache(),
+		defaultCacheTTL: opt.DefaultCacheTTL,
+		log:             log,
 		queryDurations: prometheus.NewSummaryVec(
 			prometheus.SummaryOpts{
 				Namespace: "osquery_exporter",
@@ -203,6 +221,22 @@ func NewOsqueryCollector(r Runner, m model.Metrics, log *slog.Logger) (*OsqueryC
 			},
 			[]string{"name"},
 		),
+		cacheHits: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "osquery_exporter",
+				Name:      "query_cache_hits_total",
+				Help:      "Total number of query cache hits",
+			},
+			[]string{"name"},
+		),
+		cacheMisses: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "osquery_exporter",
+				Name:      "query_cache_misses_total",
+				Help:      "Total number of query cache misses",
+			},
+			[]string{"name"},
+		),
 	}, nil
 }
 
@@ -214,6 +248,17 @@ func (c *OsqueryCollector) Describe(ch chan<- *prometheus.Desc) {
 	c.queryDurations.Describe(ch)
 	c.success.Describe(ch)
 	c.resultsets.Describe(ch)
+	c.cacheHits.Describe(ch)
+	c.cacheMisses.Describe(ch)
+}
+
+// queryCacheTTL returns the effective TTL for a query group. Only the global
+// default is supported today. A zero or negative TTL disables caching.
+func (c *OsqueryCollector) queryCacheTTL(g *queryGroup) (time.Duration, bool) {
+	if c.defaultCacheTTL <= 0 {
+		return 0, false
+	}
+	return c.defaultCacheTTL, true
 }
 
 // Collect implements prometheus.Collector
@@ -225,7 +270,19 @@ func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
 			defer wg.Done()
 
 			begin := time.Now()
-			result, err := c.runner.Run(context.Background(), g.query)
+			ttl, useCache := c.queryCacheTTL(g)
+
+			var result *model.OsqueryResult
+			var err error
+			var cacheHit bool
+			if useCache {
+				result, cacheHit, err = c.cache.runOrWait(context.Background(), g.query, ttl, func(ctx context.Context) (*model.OsqueryResult, error) {
+					return c.runner.Run(ctx, g.query)
+				})
+			} else {
+				result, err = c.runner.Run(context.Background(), g.query)
+			}
+
 			if err != nil {
 				c.log.Error("failed to run query", "query", g.query, "error", err)
 				for _, col := range g.metrics {
@@ -234,6 +291,14 @@ func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
 					c.queryDurations.WithLabelValues(col.String()).Observe(time.Since(begin).Seconds())
 				}
 				return
+			}
+
+			for _, col := range g.metrics {
+				if cacheHit {
+					c.cacheHits.WithLabelValues(col.String()).Inc()
+				} else {
+					c.cacheMisses.WithLabelValues(col.String()).Inc()
+				}
 			}
 
 			resultset := len(result.Items)
@@ -246,6 +311,8 @@ func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
 	c.queryDurations.Collect(ch)
 	c.success.Collect(ch)
 	c.resultsets.Collect(ch)
+	c.cacheHits.Collect(ch)
+	c.cacheMisses.Collect(ch)
 }
 
 func (c *OsqueryCollector) collectFromResult(begin time.Time, col singleQueryCollector, result *model.OsqueryResult, resultset int, ch chan<- prometheus.Metric) {
