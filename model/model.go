@@ -199,6 +199,9 @@ func ResolveQueryRefs(config *Config) error {
 		if q.Query == "" {
 			return fmt.Errorf("shared query %q: query cannot be empty", q.Name)
 		}
+		if err := validateReadOnlyQuery(q.Query); err != nil {
+			return fmt.Errorf("shared query %q: %w", q.Name, err)
+		}
 		if _, dup := refs[q.Name]; dup {
 			return fmt.Errorf("duplicate shared query name %q", q.Name)
 		}
@@ -217,6 +220,12 @@ func ResolveQueryRefs(config *Config) error {
 			}
 			*query = resolved
 			*cacheTTL = cacheTTLs[*queryref]
+		}
+		if *query == "" {
+			return fmt.Errorf("metric %q: query cannot be empty", name)
+		}
+		if err := validateReadOnlyQuery(*query); err != nil {
+			return fmt.Errorf("metric %q: %w", name, err)
 		}
 		return nil
 	}
