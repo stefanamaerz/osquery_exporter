@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -43,11 +45,45 @@ func parseCacheTTL(s string) (time.Duration, error) {
 	return ttl, nil
 }
 
+// parseByteSize parses a human-readable byte size such as "8KB" or "1MB".
+// Bare numbers are interpreted as bytes. Whitespace is ignored.
+func parseByteSize(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	var mult int64 = 1
+	switch {
+	case strings.HasSuffix(s, "KiB") || strings.HasSuffix(s, "KB") || strings.HasSuffix(s, "K"):
+		mult = 1 << 10
+		s = s[:len(s)-len(trimSuffixOneOf(s, "KiB", "KB", "K"))]
+	case strings.HasSuffix(s, "MiB") || strings.HasSuffix(s, "MB") || strings.HasSuffix(s, "M"):
+		mult = 1 << 20
+		s = s[:len(s)-len(trimSuffixOneOf(s, "MiB", "MB", "M"))]
+	case strings.HasSuffix(s, "GiB") || strings.HasSuffix(s, "GB") || strings.HasSuffix(s, "G"):
+		mult = 1 << 30
+		s = s[:len(s)-len(trimSuffixOneOf(s, "GiB", "GB", "G"))]
+	}
+	s = strings.TrimSpace(s)
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("invalid byte size %q", s)
+	}
+	return int(n * float64(mult)), nil
+}
+
+func trimSuffixOneOf(s string, suffixes ...string) string {
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(s, suffix) {
+			return suffix
+		}
+	}
+	return ""
+}
+
 // runConfig groups the command-line settings that influence HTTP serving.
 type runConfig struct {
 	metricsPath            string
 	enableRuntimeGoMetrics bool
 	maxRequestsInFlight    int
+	maxHeaderBytes         int
 	defaultCacheTTL        time.Duration
 }
 
@@ -102,6 +138,7 @@ func run(ctx context.Context, log *slog.Logger, runner collector.Runner, config 
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      90 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    rc.maxHeaderBytes,
 	}
 
 	shutdownDone := make(chan struct{})
@@ -137,6 +174,7 @@ func main() {
 		metricsPath            = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
 		enableRuntimeGoMetrics = flag.Bool("web.enable-runtime-golang-metrics", true, "Expose Go runtime and process metrics on /metrics.")
 		maxRequestsInFlight    = flag.Int("web.max-requests-in-flight", 2, "Maximum number of simultaneous /metrics scrapes. 0 disables the limit.")
+		maxHeaderBytesFlag     = flag.String("web.max-header-bytes", "8KB", "Maximum size of HTTP request headers, e.g. 4KB, 1MB.")
 		printVersion           = flag.Bool("version", false, "Print version and exit")
 	)
 	flag.Parse()
@@ -187,6 +225,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	maxHeaderBytes, err := parseByteSize(*maxHeaderBytesFlag)
+	if err != nil {
+		log.Error("invalid web.max-header-bytes", "value", *maxHeaderBytesFlag, "error", err)
+		os.Exit(1)
+	}
+
 	ln, err := net.Listen("tcp", *listenAddress)
 	if err != nil {
 		log.Error("failed to listen", "address", *listenAddress, "error", err)
@@ -197,6 +241,7 @@ func main() {
 		metricsPath:            *metricsPath,
 		enableRuntimeGoMetrics: *enableRuntimeGoMetrics,
 		maxRequestsInFlight:    *maxRequestsInFlight,
+		maxHeaderBytes:         maxHeaderBytes,
 		defaultCacheTTL:        defaultCacheTTL,
 	}
 
