@@ -18,6 +18,7 @@ import (
 	"github.com/stefanamaerz/osquery_exporter/collector"
 	"github.com/stefanamaerz/osquery_exporter/model"
 	"github.com/stefanamaerz/osquery_exporter/osquery"
+	"github.com/stefanamaerz/osquery_exporter/version"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,8 +29,14 @@ func main() {
 		metricsPath            = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
 		enableRuntimeGoMetrics = flag.Bool("web.enable-runtime-golang-metrics", true, "Expose Go runtime and process metrics on /metrics.")
 		maxRequestsInFlight    = flag.Int("web.max-requests-in-flight", 2, "Maximum number of simultaneous /metrics scrapes. 0 disables the limit.")
+		printVersion           = flag.Bool("version", false, "Print version and exit")
 	)
 	flag.Parse()
+
+	if *printVersion {
+		fmt.Println(version.Version)
+		os.Exit(0)
+	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
