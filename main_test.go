@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,5 +167,106 @@ func TestRunShutdownWaitsForInFlightRequest(t *testing.T) {
 	case <-reqDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("in-flight request did not complete")
+	}
+}
+
+func startTestServer(t *testing.T, rc runConfig) (string, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx, discardLogger(), fastRunner{}, testConfig(), rc, ln)
+	}()
+
+	url := "http://" + ln.Addr().String() + rc.metricsPath
+	cleanup := func() {
+		cancel()
+		<-done
+	}
+	return url, cleanup
+}
+
+func TestRunRejectsOversizedHeaders(t *testing.T) {
+	rc := runConfig{
+		metricsPath:         "/metrics",
+		maxRequestsInFlight: 2,
+		maxHeaderBytes:      8 << 10,
+	}
+	url, cleanup := startTestServer(t, rc)
+	defer cleanup()
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	// A single 16 KiB header exceeds the 8 KiB MaxHeaderBytes limit.
+	req.Header.Set("X-Large", strings.Repeat("x", 16<<10))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusRequestHeaderFieldsTooLarge {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusRequestHeaderFieldsTooLarge)
+	}
+}
+
+func TestRunAllowsNormalHeaders(t *testing.T) {
+	rc := runConfig{
+		metricsPath:         "/metrics",
+		maxRequestsInFlight: 2,
+		maxHeaderBytes:      8 << 10,
+	}
+	url, cleanup := startTestServer(t, rc)
+	defer cleanup()
+
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}
+
+func TestParseByteSize(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int
+	}{
+		{"1024", 1024},
+		{"1KB", 1024},
+		{"1KiB", 1024},
+		{"2MB", 2 << 20},
+		{"1.5MB", 1572864},
+		{"  8KB  ", 8192},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := parseByteSize(tt.input)
+			if err != nil {
+				t.Fatalf("parseByteSize(%q) error: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("parseByteSize(%q) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
+
+	if _, err := parseByteSize("-1"); err == nil {
+		t.Fatal("expected error for negative size")
+	}
+	if _, err := parseByteSize("abc"); err == nil {
+		t.Fatal("expected error for invalid size")
 	}
 }
