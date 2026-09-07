@@ -1,8 +1,6 @@
 package model
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -51,14 +49,17 @@ type Metric struct {
 	CacheTTL        string  `yaml:"cache_ttl"`
 }
 
-// String() implements the Stringer interface and the collector.singleQueryCollector
-// interface
+// String() implements the Stringer interface.
 func (m Metric) String() string {
 	return m.Name
 }
 
-// Desc() implements the collector.singleQueryCollector interface.
-// It returns a prometheus metric description
+// CacheTTL returns the per-metric cache TTL string.
+func (m Metric) CacheTTLString() string {
+	return m.CacheTTL
+}
+
+// Desc returns a prometheus metric description for the metric.
 func (m Metric) Desc() *prometheus.Desc {
 	return prometheus.NewDesc(
 		prometheus.BuildFQName(namespace, "", m.Name),
@@ -66,21 +67,12 @@ func (m Metric) Desc() *prometheus.Desc {
 	)
 }
 
-// Query() implements the collector.singleQueryCollector interface.
+// Query() returns the SQL query string.
 func (m Metric) Query() string {
 	return m.Querystring
 }
 
-// Id() implements the collector.singleQueryCollector interface.
-// It returns a unique ID of a metric definition. Metrics are considered unique, if the
-// sha256 sum of the querystring is unique
-func (m Metric) Id() string {
-	return id(m.Querystring)
-}
-
-// Value() implements the collector.singleQueryCollector interface.
-// It returns the key of the osquery-json output that yields the prometheus
-// metric(vec) value
+// Value() returns the key of the osquery-json output that yields the value.
 func (m Metric) Value() string {
 	return m.ValueIdentifier
 }
@@ -91,8 +83,7 @@ type MetricVec struct {
 	LabelIdentifier []string `yaml:"labelidentifier"`
 }
 
-// Labels() implements the collector.singleQueryCollector interface.
-// It returns the keys which are used as prometheus metric vector labels
+// Labels returns the keys which are used as prometheus metric vector labels.
 func (v MetricVec) Labels() []string {
 	return v.LabelIdentifier
 }
@@ -102,14 +93,12 @@ type Counter struct {
 	Metric `yaml:",inline"`
 }
 
-// Labels() implements the collector.singleQueryCollector interface.
-// For counters an empty array is returned
+// Labels implements the metric interface.
 func (Counter) Labels() []string {
 	return []string{}
 }
 
-// ValueType() implements the collector.singleQueryCollector interface.
-// It returns the prometheus value type for a counter
+// ValueType returns the prometheus value type for a counter.
 func (Counter) ValueType() prometheus.ValueType {
 	return prometheus.CounterValue
 }
@@ -119,14 +108,12 @@ type Gauge struct {
 	Metric `yaml:",inline"`
 }
 
-// Labels() implements the collector.singleQueryCollector interface.
-// For gauges an empty array is returned
+// Labels implements the metric interface.
 func (Gauge) Labels() []string {
 	return []string{}
 }
 
-// ValueType() implements the collector.singleQueryCollector interface.
-// It returns the prometheus value type for a gague
+// ValueType returns the prometheus value type for a gauge.
 func (Gauge) ValueType() prometheus.ValueType {
 	return prometheus.GaugeValue
 }
@@ -136,14 +123,12 @@ type CounterVec struct {
 	MetricVec `yaml:",inline"`
 }
 
-// ValueType() implements the collector.singleQueryCollector interface.
-// It returns the prometheus value type for a counter
+// ValueType returns the prometheus value type for a counter.
 func (CounterVec) ValueType() prometheus.ValueType {
 	return prometheus.CounterValue
 }
 
-// Desc() implements the collector.singleQueryCollector interface.
-// It returns a prometheus metric description
+// Desc returns a prometheus metric description for the counter vector.
 func (cv CounterVec) Desc() *prometheus.Desc {
 	return prometheus.NewDesc(
 		prometheus.BuildFQName(namespace, "", cv.Name),
@@ -156,14 +141,12 @@ type GaugeVec struct {
 	MetricVec `yaml:",inline"`
 }
 
-// ValueType() implements the collector.singleQueryCollector interface.
-// It returns the prometheus value type for a gauge
+// ValueType returns the prometheus value type for a gauge.
 func (GaugeVec) ValueType() prometheus.ValueType {
 	return prometheus.GaugeValue
 }
 
-// Desc() implements the collector.singleQueryCollector interface.
-// It returns a prometheus metric description
+// Desc returns a prometheus metric description for the gauge vector.
 func (gv GaugeVec) Desc() *prometheus.Desc {
 	return prometheus.NewDesc(
 		prometheus.BuildFQName(namespace, "", gv.Name),
@@ -178,11 +161,6 @@ type OsqueryItem map[string]string
 type OsqueryResult struct {
 	Items   []OsqueryItem
 	Runtime time.Duration
-}
-
-func id(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
 }
 
 // ResolveQueryRefs resolves every metric's queryref against the named queries

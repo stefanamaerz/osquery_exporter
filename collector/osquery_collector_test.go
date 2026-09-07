@@ -23,6 +23,7 @@ type fakeRunner struct {
 }
 
 func (f *fakeRunner) Run(ctx context.Context, query string) (*model.OsqueryResult, error) {
+	_ = ctx
 	if err, ok := f.errs[query]; ok {
 		return nil, err
 	}
@@ -32,8 +33,16 @@ func (f *fakeRunner) Run(ctx context.Context, query string) (*model.OsqueryResul
 	return &model.OsqueryResult{Items: []model.OsqueryItem{}}, nil
 }
 
+func counterMetric() metricDefinition {
+	return newMetricDefinition("counter", "test", "SELECT 1", "count", "help", "", nil, prometheus.CounterValue)
+}
+
+func vecMetric() metricDefinition {
+	return newMetricDefinition("countervec", "test", "SELECT 1", "count", "help", "", []string{"label"}, prometheus.CounterValue)
+}
+
 func TestEmitMetricsSuccess(t *testing.T) {
-	m := model.Counter{Metric: model.Metric{Name: "test", Help: "help", Querystring: "SELECT 1", ValueIdentifier: "count"}}
+	m := counterMetric()
 	res := &model.OsqueryResult{
 		Items: []model.OsqueryItem{{"count": "7"}},
 	}
@@ -47,7 +56,7 @@ func TestEmitMetricsSuccess(t *testing.T) {
 }
 
 func TestEmitMetricsMultiValueError(t *testing.T) {
-	m := model.Counter{Metric: model.Metric{Name: "test", Help: "help", Querystring: "SELECT 1", ValueIdentifier: "count"}}
+	m := counterMetric()
 	res := &model.OsqueryResult{
 		Items: []model.OsqueryItem{{"count": "1"}, {"count": "2"}},
 	}
@@ -57,7 +66,7 @@ func TestEmitMetricsMultiValueError(t *testing.T) {
 }
 
 func TestEmitMetricsMissingValueKey(t *testing.T) {
-	m := model.Counter{Metric: model.Metric{Name: "test", Help: "help", Querystring: "SELECT 1", ValueIdentifier: "count"}}
+	m := counterMetric()
 	res := &model.OsqueryResult{
 		Items: []model.OsqueryItem{{"wrong": "1"}},
 	}
@@ -67,7 +76,7 @@ func TestEmitMetricsMissingValueKey(t *testing.T) {
 }
 
 func TestEmitMetricsNonNumericValue(t *testing.T) {
-	m := model.Counter{Metric: model.Metric{Name: "test", Help: "help", Querystring: "SELECT 1", ValueIdentifier: "count"}}
+	m := counterMetric()
 	res := &model.OsqueryResult{
 		Items: []model.OsqueryItem{{"count": "abc"}},
 	}
@@ -77,10 +86,7 @@ func TestEmitMetricsNonNumericValue(t *testing.T) {
 }
 
 func TestEmitMetricsMissingLabel(t *testing.T) {
-	m := model.CounterVec{MetricVec: model.MetricVec{
-		Metric:          model.Metric{Name: "test", Help: "help", Querystring: "SELECT 1", ValueIdentifier: "count"},
-		LabelIdentifier: []string{"label"},
-	}}
+	m := vecMetric()
 	res := &model.OsqueryResult{
 		Items: []model.OsqueryItem{{"count": "1"}},
 	}
@@ -90,10 +96,7 @@ func TestEmitMetricsMissingLabel(t *testing.T) {
 }
 
 func TestEmitMetricsVec(t *testing.T) {
-	m := model.CounterVec{MetricVec: model.MetricVec{
-		Metric:          model.Metric{Name: "test", Help: "help", Querystring: "SELECT 1", ValueIdentifier: "count"},
-		LabelIdentifier: []string{"label"},
-	}}
+	m := vecMetric()
 	res := &model.OsqueryResult{
 		Items: []model.OsqueryItem{
 			{"count": "1", "label": "a"},
@@ -118,7 +121,7 @@ func TestNewOsqueryCollectorDuplicateName(t *testing.T) {
 			{Metric: model.Metric{Name: "dup", Help: "second", Querystring: "SELECT 2", ValueIdentifier: "v"}},
 		},
 	}
-	if _, err := NewOsqueryCollector(&fakeRunner{}, m, discardLogger()); err == nil {
+	if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0); err == nil {
 		t.Fatal("expected error for duplicate metric name")
 	}
 }
@@ -129,7 +132,7 @@ func TestNewOsqueryCollectorInvalidDescriptor(t *testing.T) {
 			{Metric: model.Metric{Name: "", Help: "empty", Querystring: "SELECT 1", ValueIdentifier: "v"}},
 		},
 	}
-	if _, err := NewOsqueryCollector(&fakeRunner{}, m, discardLogger()); err == nil {
+	if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0); err == nil {
 		t.Fatal("expected error for empty metric name")
 	}
 }
@@ -145,7 +148,7 @@ func TestCollectorCollectSuccess(t *testing.T) {
 			{Metric: model.Metric{Name: "ones", Help: "ones", Querystring: "SELECT 1", ValueIdentifier: "count"}},
 		},
 	}
-	c, err := NewOsqueryCollector(fr, m, discardLogger())
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -175,7 +178,7 @@ func TestCollectorCollectQueryError(t *testing.T) {
 			{Metric: model.Metric{Name: "boom", Help: "boom", Querystring: "SELECT boom", ValueIdentifier: "count"}},
 		},
 	}
-	c, err := NewOsqueryCollector(fr, m, discardLogger())
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -197,7 +200,7 @@ func TestCollectorCollectQueryError(t *testing.T) {
 
 func TestCollectorDescribe(t *testing.T) {
 	fr := &fakeRunner{}
-	c, err := NewOsqueryCollector(fr, model.Metrics{}, discardLogger())
+	c, err := NewOsqueryCollector(context.Background(), fr, model.Metrics{}, discardLogger(), 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -222,17 +225,14 @@ func TestNewOsqueryCollectorReservedName(t *testing.T) {
 				{Metric: model.Metric{Name: reserved, Help: "h", Querystring: "SELECT 1 AS v", ValueIdentifier: "v"}},
 			},
 		}
-		if _, err := NewOsqueryCollector(&fakeRunner{}, m, discardLogger()); err == nil {
+		if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0); err == nil {
 			t.Fatalf("expected error for reserved metric name %q", reserved)
 		}
 	}
 }
 
 func TestEmitMetricsDuplicateLabelSet(t *testing.T) {
-	m := model.GaugeVec{MetricVec: model.MetricVec{
-		Metric:          model.Metric{Name: "by_shell", Help: "h", Querystring: "SELECT 1", ValueIdentifier: "count"},
-		LabelIdentifier: []string{"shell"},
-	}}
+	m := newMetricDefinition("gaugevec", "by_shell", "SELECT 1", "count", "h", "", []string{"shell"}, prometheus.GaugeValue)
 	res := &model.OsqueryResult{
 		Items: []model.OsqueryItem{
 			{"count": "1", "shell": "/bin/sh"},
@@ -265,7 +265,7 @@ func TestGatherPedantic(t *testing.T) {
 			}},
 		},
 	}
-	c, err := NewOsqueryCollector(fr, m, discardLogger())
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -294,13 +294,11 @@ func TestCollectorShutdownContextCancelsInFlightQuery(t *testing.T) {
 			{Metric: model.Metric{Name: "ones", Help: "ones", Querystring: "SELECT 1", ValueIdentifier: "count"}},
 		},
 	}
-	c, err := NewOsqueryCollector(br, m, discardLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	c, err := NewOsqueryCollector(ctx, br, m, discardLogger(), 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	c.ShutdownContext(ctx)
 
 	ch := make(chan prometheus.Metric, 10)
 	done := make(chan struct{})
@@ -365,7 +363,7 @@ func TestCollectorDeduplicatesSharedQuery(t *testing.T) {
 			}},
 		},
 	}
-	c, err := NewOsqueryCollector(fr, m, discardLogger())
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -406,7 +404,7 @@ func TestGatherDuplicateLabelSetFailsSuccess(t *testing.T) {
 			}},
 		},
 	}
-	c, err := NewOsqueryCollector(fr, m, discardLogger())
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}

@@ -73,29 +73,6 @@ func TestCounterGaugeLabelsEmpty(t *testing.T) {
 	}
 }
 
-func TestIdDeterministic(t *testing.T) {
-	first := id("SELECT 1")
-	second := id("SELECT 1")
-	if first != second {
-		t.Fatalf("id('SELECT 1') non-deterministic: %q vs %q", first, second)
-	}
-	if first == id("SELECT 2") {
-		t.Fatalf("id('SELECT 1') collided with id('SELECT 2'): %q", first)
-	}
-}
-
-func TestIdHexEncoded(t *testing.T) {
-	got := id("SELECT 1")
-	if len(got) != 64 {
-		t.Fatalf("id length = %d, want 64 hex chars", len(got))
-	}
-	for _, r := range got {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			t.Fatalf("id %q contains non-hex character %q", got, r)
-		}
-	}
-}
-
 func TestResolveQueryRefs(t *testing.T) {
 	ref := "shared"
 	config := Config{

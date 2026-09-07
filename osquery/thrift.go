@@ -18,23 +18,6 @@ import (
 // dial per query per scrape.
 const reconnectCooldown = 5 * time.Second
 
-// transportError marks an error as a connection/transport-level failure, as
-// opposed to a well-formed osquery error response. Only transport errors
-// justify a reconnect; a SQL error or a nil status means the connection
-// itself is healthy.
-type transportError struct{ err error }
-
-func (e transportError) Error() string { return e.err.Error() }
-func (e transportError) Unwrap() error { return e.err }
-
-// thriftQuerier is the minimal interface ThriftRunner needs from the
-// osquery-go ExtensionManagerClient. It makes the runner testable without a
-// real osqueryd socket.
-type thriftQuerier interface {
-	QueryContext(ctx context.Context, sql string) (*osquerygen.ExtensionResponse, error)
-	Close()
-}
-
 // ThriftRunner executes queries by connecting to a running osqueryd over its
 // Thrift extension socket.
 type ThriftRunner struct {
@@ -46,7 +29,10 @@ type ThriftRunner struct {
 	// client is the current shared client. It is never closed while the lock
 	// is held; a displaced client is closed after the swap so an in-flight
 	// query holding a snapshot is not torn down.
-	client thriftQuerier
+	client interface {
+		QueryContext(ctx context.Context, sql string) (*osquerygen.ExtensionResponse, error)
+		Close()
+	}
 	// gen increments each time client is replaced. A goroutine only triggers
 	// a reconnect if the client it queried on has not already been replaced.
 	gen int
@@ -79,7 +65,10 @@ func NewThriftRunner(socketPath, timeout string, log *slog.Logger) (*ThriftRunne
 
 // dial creates a new client. It performs blocking network I/O and must never
 // be called with r.mu held.
-func (r *ThriftRunner) dial() (thriftQuerier, error) {
+func (r *ThriftRunner) dial() (interface {
+	QueryContext(ctx context.Context, sql string) (*osquerygen.ExtensionResponse, error)
+	Close()
+}, error) {
 	return osquerygo.NewClient(r.socketPath, r.timeout,
 		osquerygo.DefaultWaitTime(r.timeout),
 		osquerygo.MaxWaitTime(r.timeout),
@@ -147,8 +136,7 @@ func (r *ThriftRunner) Run(ctx context.Context, query string) (*model.OsqueryRes
 	// Only a transport-level failure justifies a reconnect. A well-formed
 	// osquery error response (SQL error, nil status) or a context deadline
 	// proves the connection is healthy, so reconnecting would just add load.
-	var te transportError
-	if !errors.As(err, &te) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return nil, err
 	}
 
@@ -177,12 +165,12 @@ func (r *ThriftRunner) query(ctx context.Context, query string) (*model.OsqueryR
 	r.mu.Unlock()
 
 	if client == nil {
-		return nil, gen, transportError{err: errors.New("no osqueryd connection")}
+		return nil, gen, errors.New("no osqueryd connection")
 	}
 
 	response, err := client.QueryContext(ctx, query)
 	if err != nil {
-		return nil, gen, transportError{err: fmt.Errorf("osqueryd query failed: %w", err)}
+		return nil, gen, fmt.Errorf("osqueryd query failed: %w", err)
 	}
 	if response.Status == nil {
 		return nil, gen, fmt.Errorf("osqueryd query returned nil status")

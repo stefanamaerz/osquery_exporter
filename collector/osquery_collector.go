@@ -18,73 +18,60 @@ type Runner interface {
 	Run(ctx context.Context, query string) (*model.OsqueryResult, error)
 }
 
-// singleQueryCollector represents a metric/query definition for a single osquery call
-type singleQueryCollector interface {
-	String() string
-	Id() string
-	Query() string
-	Desc() *prometheus.Desc
-	ValueType() prometheus.ValueType
-	Value() string
-	Labels() []string
+// metricDefinition represents any configured metric once normalized into a
+// common shape used by the collector.
+type metricDefinition struct {
+	name       string
+	query      string
+	valueKey   string
+	labels     []string
+	valueType  prometheus.ValueType
+	desc       *prometheus.Desc
+	cacheTTL   string
+	sourceType string
 }
 
-func metricCacheTTL(c singleQueryCollector) string {
-	switch m := c.(type) {
-	case model.Counter:
-		return m.CacheTTL
-	case model.CounterVec:
-		return m.CacheTTL
-	case model.Gauge:
-		return m.CacheTTL
-	case model.GaugeVec:
-		return m.CacheTTL
-	case *model.Counter:
-		return m.CacheTTL
-	case *model.CounterVec:
-		return m.CacheTTL
-	case *model.Gauge:
-		return m.CacheTTL
-	case *model.GaugeVec:
-		return m.CacheTTL
+func newMetricDefinition(sourceType string, name, query, valueKey, help, cacheTTL string, labels []string, valueType prometheus.ValueType) metricDefinition {
+	labelNames := labels
+	if labelNames == nil {
+		labelNames = []string{}
 	}
-	return ""
+	return metricDefinition{
+		name:       name,
+		query:      query,
+		valueKey:   valueKey,
+		labels:     labelNames,
+		valueType:  valueType,
+		desc:       prometheus.NewDesc(prometheus.BuildFQName("osquery_exporter", "", name), help, labelNames, nil),
+		cacheTTL:   cacheTTL,
+		sourceType: sourceType,
+	}
 }
 
-// newMetricError wraps errors that should be reported to the user through the
-// metric's success gauge instead of crashing the collector.
-type metricError struct {
-	msg string
-}
-
-func (e metricError) Error() string { return e.msg }
-
-func emitMetrics(sqc singleQueryCollector, result *model.OsqueryResult) ([]prometheus.Metric, error) {
+func emitMetrics(m metricDefinition, result *model.OsqueryResult) ([]prometheus.Metric, error) {
 	// metrics with no labels can only accept one result set
-	if len(sqc.Labels()) == 0 && len(result.Items) > 1 {
+	if len(m.labels) == 0 && len(result.Items) > 1 {
 		return nil, metricError{msg: "metrics with no labels can only accept one result set"}
 	}
 
-	desc := sqc.Desc()
-	valueType := sqc.ValueType()
 	metrics := make([]prometheus.Metric, 0, len(result.Items))
 	seen := make(map[string]struct{}, len(result.Items))
 
 	for _, item := range result.Items {
-		value, ok := item[sqc.Value()]
+		value, ok := item[m.valueKey]
 		if !ok {
-			return nil, metricError{msg: fmt.Sprintf("query %q doesn't contain value key %q", sqc.Query(), sqc.Value())}
+			return nil, metricError{msg: fmt.Sprintf("query %q doesn't contain value key %q", m.query, m.valueKey)}
 		}
 		valueAsFloat, err := strconv.ParseFloat(value, 64)
 		if err != nil {
-			return nil, metricError{msg: fmt.Sprintf("query %q result %q can't be converted to float: %v", sqc.Query(), value, err)}
+			return nil, metricError{msg: fmt.Sprintf("query %q result %q can't be converted to float: %v", m.query, value, err)}
 		}
-		labels := make([]string, 0, len(sqc.Labels()))
-		for _, labelIdentifier := range sqc.Labels() {
-			if label, ok := item[labelIdentifier]; ok {
+		labels := make([]string, 0, len(m.labels))
+		for _, labelKey := range m.labels {
+			if label, ok := item[labelKey]; ok {
 				labels = append(labels, label)
 			} else {
-				return nil, metricError{msg: fmt.Sprintf("query %q doesn't contain a label key %q", sqc.Query(), labelIdentifier)}
+				return nil, metricError{msg: fmt.Sprintf("query %q doesn't contain a label key %q", m.query, labelKey)}
 			}
 		}
 		// A duplicate label set would produce two series with identical labels.
@@ -93,15 +80,15 @@ func emitMetrics(sqc singleQueryCollector, result *model.OsqueryResult) ([]prome
 		// fail the metric instead.
 		key := strings.Join(labels, "\x00")
 		if _, dup := seen[key]; dup {
-			return nil, metricError{msg: fmt.Sprintf("query %q returned duplicate label set %v; add the label columns to GROUP BY or widen labelidentifier", sqc.Query(), labels)}
+			return nil, metricError{msg: fmt.Sprintf("query %q returned duplicate label set %v; add the label columns to GROUP BY or widen labelidentifier", m.query, labels)}
 		}
 		seen[key] = struct{}{}
 
-		m, err := prometheus.NewConstMetric(desc, valueType, valueAsFloat, labels...)
+		metric, err := prometheus.NewConstMetric(m.desc, m.valueType, valueAsFloat, labels...)
 		if err != nil {
-			return nil, metricError{msg: fmt.Sprintf("cannot build metric for query %q: %v", sqc.Query(), err)}
+			return nil, metricError{msg: fmt.Sprintf("cannot build metric for query %q: %v", m.query, err)}
 		}
-		metrics = append(metrics, m)
+		metrics = append(metrics, metric)
 	}
 	return metrics, nil
 }
@@ -111,14 +98,14 @@ func emitMetrics(sqc singleQueryCollector, result *model.OsqueryResult) ([]prome
 type queryGroup struct {
 	query    string
 	cacheTTL time.Duration
-	metrics  []singleQueryCollector
+	metrics  []metricDefinition
 }
 
 // OsqueryCollector represents a collector that collects metrics from a set of osquery queries. It implements
 // prometheus Collector
 type OsqueryCollector struct {
+	ctx              context.Context
 	runner           Runner
-	collectors       map[string]singleQueryCollector
 	groups           map[string]*queryGroup
 	cache            *queryCache
 	defaultCacheTTL  time.Duration
@@ -130,14 +117,6 @@ type OsqueryCollector struct {
 	executions       *prometheus.CounterVec
 	cacheHits        *prometheus.CounterVec
 	cacheMisses      *prometheus.CounterVec
-	shutdownCtxMu    sync.RWMutex
-	shutdownCtx      context.Context
-}
-
-// NewOsqueryCollectorOptions contains optional arguments for NewOsqueryCollector.
-type NewOsqueryCollectorOptions struct {
-	DefaultCacheTTL  time.Duration
-	MaxScrapeTimeout time.Duration
 }
 
 // reservedNames are the exporter's internal metric names. A config metric with
@@ -155,101 +134,90 @@ var reservedNames = map[string]struct{}{
 
 // NewOsqueryCollector creates an OsQueryCollector from a given osquery-runner and a set of metric definitions.
 // It fails fast if the config contains duplicate metric names or invalid metric descriptors.
-func NewOsqueryCollector(r Runner, m model.Metrics, log *slog.Logger, opts ...NewOsqueryCollectorOptions) (*OsqueryCollector, error) {
-	collectors := make(map[string]singleQueryCollector)
+func NewOsqueryCollector(ctx context.Context, r Runner, m model.Metrics, log *slog.Logger, defaultCacheTTL time.Duration) (*OsqueryCollector, error) {
 	groups := make(map[string]*queryGroup)
+	names := make(map[string]struct{})
 
-	add := func(c singleQueryCollector) error {
-		name := c.String()
-		if name == "" {
+	add := func(def metricDefinition) error {
+		if def.name == "" {
 			return fmt.Errorf("metric name cannot be empty")
 		}
-		if _, bad := reservedNames[name]; bad {
-			return fmt.Errorf("metric name %q is reserved by the exporter", name)
+		if _, bad := reservedNames[def.name]; bad {
+			return fmt.Errorf("metric name %q is reserved by the exporter", def.name)
 		}
-		if c.Query() == "" {
-			return fmt.Errorf("metric %q: query cannot be empty", name)
+		if def.query == "" {
+			return fmt.Errorf("metric %q: query cannot be empty", def.name)
 		}
-		if c.Value() == "" {
-			return fmt.Errorf("metric %q: valueidentifier cannot be empty", name)
+		if def.valueKey == "" {
+			return fmt.Errorf("metric %q: valueidentifier cannot be empty", def.name)
 		}
-		if _, dup := collectors[name]; dup {
-			return fmt.Errorf("duplicate metric name %q in config", name)
+		if _, dup := names[def.name]; dup {
+			return fmt.Errorf("duplicate metric name %q in config", def.name)
 		}
-		if err := c.Desc().Err(); err != nil {
-			return fmt.Errorf("metric %q: invalid descriptor: %w", name, err)
+		if err := def.desc.Err(); err != nil {
+			return fmt.Errorf("metric %q: invalid descriptor: %w", def.name, err)
 		}
-		collectors[name] = c
+		names[def.name] = struct{}{}
 
-		raw := metricCacheTTL(c)
 		var metricTTL time.Duration
-		if raw != "" {
-			ttl, err := time.ParseDuration(raw)
+		if def.cacheTTL != "" {
+			ttl, err := time.ParseDuration(def.cacheTTL)
 			if err != nil {
-				return fmt.Errorf("metric %q: invalid cache_ttl %q: %w", name, raw, err)
+				return fmt.Errorf("metric %q: invalid cache_ttl %q: %w", def.name, def.cacheTTL, err)
 			}
 			if ttl < 0 {
-				return fmt.Errorf("metric %q: negative cache_ttl %v", name, ttl)
+				return fmt.Errorf("metric %q: negative cache_ttl %v", def.name, ttl)
 			}
 			metricTTL = ttl
 		}
 
-		g, ok := groups[c.Query()]
+		g, ok := groups[def.query]
 		if !ok {
-			g = &queryGroup{query: c.Query(), cacheTTL: metricTTL}
-			groups[c.Query()] = g
+			g = &queryGroup{query: def.query, cacheTTL: metricTTL}
+			groups[def.query] = g
 		} else if metricTTL > 0 {
 			if g.cacheTTL > 0 && g.cacheTTL != metricTTL {
-				return fmt.Errorf("metric %q: conflicting cache_ttl for query %q", name, g.query)
+				return fmt.Errorf("metric %q: conflicting cache_ttl for query %q", def.name, g.query)
 			}
 			g.cacheTTL = metricTTL
 		}
-		g.metrics = append(g.metrics, c)
+		g.metrics = append(g.metrics, def)
 		return nil
 	}
 
 	for _, c := range m.Counters {
 		log.Info("adding collector", "name", c.String())
-		if err := add(c); err != nil {
+		if err := add(newMetricDefinition("counter", c.String(), c.Query(), c.Value(), c.Help, c.CacheTTLString(), c.Labels(), c.ValueType())); err != nil {
 			return nil, err
 		}
 	}
 	for _, cv := range m.CounterVecs {
 		log.Info("adding collector", "name", cv.String())
-		if err := add(cv); err != nil {
+		if err := add(newMetricDefinition("countervec", cv.String(), cv.Query(), cv.Value(), cv.Help, cv.CacheTTLString(), cv.Labels(), cv.ValueType())); err != nil {
 			return nil, err
 		}
 	}
 	for _, g := range m.Gauges {
 		log.Info("adding collector", "name", g.String())
-		if err := add(g); err != nil {
+		if err := add(newMetricDefinition("gauge", g.String(), g.Query(), g.Value(), g.Help, g.CacheTTLString(), g.Labels(), g.ValueType())); err != nil {
 			return nil, err
 		}
 	}
 	for _, gv := range m.GaugeVecs {
 		log.Info("adding collector", "name", gv.String())
-		if err := add(gv); err != nil {
+		if err := add(newMetricDefinition("gaugevec", gv.String(), gv.Query(), gv.Value(), gv.Help, gv.CacheTTLString(), gv.Labels(), gv.ValueType())); err != nil {
 			return nil, err
 		}
 	}
 
-	opt := NewOsqueryCollectorOptions{}
-	if len(opts) > 0 {
-		opt = opts[0]
-	}
-	if opt.MaxScrapeTimeout <= 0 {
-		opt.MaxScrapeTimeout = 60 * time.Second
-	}
-
 	return &OsqueryCollector{
+		ctx:              ctx,
 		runner:           r,
-		collectors:       collectors,
 		groups:           groups,
 		cache:            newQueryCache(),
-		defaultCacheTTL:  opt.DefaultCacheTTL,
-		maxScrapeTimeout: opt.MaxScrapeTimeout,
+		defaultCacheTTL:  defaultCacheTTL,
+		maxScrapeTimeout: 60 * time.Second,
 		log:              log,
-		shutdownCtx:      context.Background(),
 		queryDurations: prometheus.NewSummaryVec(
 			prometheus.SummaryOpts{
 				Namespace: "osquery_exporter",
@@ -302,8 +270,10 @@ func NewOsqueryCollector(r Runner, m model.Metrics, log *slog.Logger, opts ...Ne
 
 // Describe implements prometheus.Collector
 func (c *OsqueryCollector) Describe(ch chan<- *prometheus.Desc) {
-	for _, col := range c.collectors {
-		ch <- col.Desc()
+	for _, g := range c.groups {
+		for _, m := range g.metrics {
+			ch <- m.desc
+		}
 	}
 	c.queryDurations.Describe(ch)
 	c.success.Describe(ch)
@@ -313,23 +283,9 @@ func (c *OsqueryCollector) Describe(ch chan<- *prometheus.Desc) {
 	c.cacheMisses.Describe(ch)
 }
 
-// ShutdownContext sets the parent context used for all subsequent scrapes.
-// Cancelling it aborts in-flight osquery queries safely because the underlying
-// Thrift client respects context cancellation and the runner only reconnects
-// on transport errors, not on context cancellation.
-func (c *OsqueryCollector) ShutdownContext(ctx context.Context) {
-	c.shutdownCtxMu.Lock()
-	defer c.shutdownCtxMu.Unlock()
-	c.shutdownCtx = ctx
-}
-
 // Collect implements prometheus.Collector
 func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
-	c.shutdownCtxMu.RLock()
-	parentCtx := c.shutdownCtx
-	c.shutdownCtxMu.RUnlock()
-
-	ctx, cancel := context.WithTimeout(parentCtx, c.maxScrapeTimeout)
+	ctx, cancel := context.WithTimeout(c.ctx, c.maxScrapeTimeout)
 	defer cancel()
 
 	wg := sync.WaitGroup{}
@@ -360,7 +316,7 @@ func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
 			// representative label. All metrics in the group share the same query.
 			representative := ""
 			if len(g.metrics) > 0 {
-				representative = g.metrics[0].String()
+				representative = g.metrics[0].name
 			}
 			if representative != "" {
 				if cacheHit {
@@ -376,9 +332,9 @@ func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
 			if err != nil {
 				c.log.Error("failed to run query", "query", g.query, "error", err)
 				for _, col := range g.metrics {
-					c.success.WithLabelValues(col.String()).Set(0.0)
-					c.resultsets.WithLabelValues(col.String()).Set(0.0)
-					c.queryDurations.WithLabelValues(col.String()).Observe(time.Since(begin).Seconds())
+					c.success.WithLabelValues(col.name).Set(0.0)
+					c.resultsets.WithLabelValues(col.name).Set(0.0)
+					c.queryDurations.WithLabelValues(col.name).Observe(time.Since(begin).Seconds())
 				}
 				return
 			}
@@ -398,33 +354,41 @@ func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
 	c.cacheMisses.Collect(ch)
 }
 
-func (c *OsqueryCollector) collectFromResult(begin time.Time, col singleQueryCollector, result *model.OsqueryResult, resultset int, executed bool, ch chan<- prometheus.Metric) {
+func (c *OsqueryCollector) collectFromResult(begin time.Time, m metricDefinition, result *model.OsqueryResult, resultset int, executed bool, ch chan<- prometheus.Metric) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.log.Error("collector panic", "metric", col.String(), "panic", r)
-			c.success.WithLabelValues(col.String()).Set(0.0)
+			c.log.Error("collector panic", "metric", m.name, "panic", r)
+			c.success.WithLabelValues(m.name).Set(0.0)
 		}
 	}()
 
-	metrics, err := emitMetrics(col, result)
+	metrics, err := emitMetrics(m, result)
 	if err != nil {
-		c.log.Warn("metric update error", "metric", col.String(), "error", err)
-		c.success.WithLabelValues(col.String()).Set(0.0)
-		c.resultsets.WithLabelValues(col.String()).Set(0.0)
+		c.log.Warn("metric update error", "metric", m.name, "error", err)
+		c.success.WithLabelValues(m.name).Set(0.0)
+		c.resultsets.WithLabelValues(m.name).Set(0.0)
 		if executed {
-			c.queryDurations.WithLabelValues(col.String()).Observe(time.Since(begin).Seconds())
+			c.queryDurations.WithLabelValues(m.name).Observe(time.Since(begin).Seconds())
 		}
 		return
 	}
 
-	for _, m := range metrics {
-		ch <- m
+	for _, metric := range metrics {
+		ch <- metric
 	}
 
-	c.log.Debug("query finished", "metric", col.String(), "duration", result.Runtime)
-	c.resultsets.WithLabelValues(col.String()).Set(float64(resultset))
+	c.log.Debug("query finished", "metric", m.name, "duration", result.Runtime)
+	c.resultsets.WithLabelValues(m.name).Set(float64(resultset))
 	if executed {
-		c.queryDurations.WithLabelValues(col.String()).Observe(result.Runtime.Seconds())
+		c.queryDurations.WithLabelValues(m.name).Observe(result.Runtime.Seconds())
 	}
-	c.success.WithLabelValues(col.String()).Set(1.0)
+	c.success.WithLabelValues(m.name).Set(1.0)
 }
+
+// newMetricError wraps errors that should be reported to the user through the
+// metric's success gauge instead of crashing the collector.
+type metricError struct {
+	msg string
+}
+
+func (e metricError) Error() string { return e.msg }

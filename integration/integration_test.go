@@ -14,19 +14,12 @@ import (
 	"github.com/stefanamaerz/osquery_exporter/osquery"
 )
 
-func lookupOsqueryd(t *testing.T) (string, bool) {
-	t.Helper()
-	exe, err := exec.LookPath("osqueryd")
-	if err != nil {
-		return "", false
-	}
-	return exe, true
-}
+var integrationCtx = context.Background()
 
 func skipIfNoOsqueryd(t *testing.T) string {
 	t.Helper()
-	exe, ok := lookupOsqueryd(t)
-	if !ok {
+	exe, err := exec.LookPath("osqueryd")
+	if err != nil {
 		t.Skip("osqueryd not found in PATH; skipping integration test")
 	}
 	return exe
@@ -74,7 +67,7 @@ func TestCollectorWithRealOsqueryd(t *testing.T) {
 			{Metric: model.Metric{Name: "osquery_info_up", Help: "up metric", Querystring: "SELECT 1 AS up FROM osquery_info", ValueIdentifier: "up"}},
 		},
 	}
-	c, err := collector.NewOsqueryCollector(r, m, infoLog())
+	c, err := collector.NewOsqueryCollector(context.Background(), r, m, infoLog(), 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
