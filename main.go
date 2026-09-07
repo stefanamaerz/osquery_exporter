@@ -22,9 +22,12 @@ import (
 	"github.com/stefanamaerz/osquery_exporter/collector"
 	"github.com/stefanamaerz/osquery_exporter/model"
 	"github.com/stefanamaerz/osquery_exporter/osquery"
-	"github.com/stefanamaerz/osquery_exporter/version"
 	"gopkg.in/yaml.v3"
 )
+
+// Version is the osquery_exporter version. It is overridden by the linker when
+// built with -ldflags "-X main.Version=<value>".
+var Version = "dev"
 
 // shutdownGracePeriod is the maximum time graceful shutdown waits for
 // in-flight HTTP requests and osquery queries to finish.
@@ -49,17 +52,26 @@ func parseCacheTTL(s string) (time.Duration, error) {
 // Bare numbers are interpreted as bytes. Whitespace is ignored.
 func parseByteSize(s string) (int, error) {
 	s = strings.TrimSpace(s)
-	var mult int64 = 1
+	mult := 1
 	switch {
-	case strings.HasSuffix(s, "KiB") || strings.HasSuffix(s, "KB") || strings.HasSuffix(s, "K"):
-		mult = 1 << 10
-		s = s[:len(s)-len(trimSuffixOneOf(s, "KiB", "KB", "K"))]
-	case strings.HasSuffix(s, "MiB") || strings.HasSuffix(s, "MB") || strings.HasSuffix(s, "M"):
-		mult = 1 << 20
-		s = s[:len(s)-len(trimSuffixOneOf(s, "MiB", "MB", "M"))]
-	case strings.HasSuffix(s, "GiB") || strings.HasSuffix(s, "GB") || strings.HasSuffix(s, "G"):
+	case strings.HasSuffix(s, "GB") || strings.HasSuffix(s, "G"):
 		mult = 1 << 30
-		s = s[:len(s)-len(trimSuffixOneOf(s, "GiB", "GB", "G"))]
+		s = strings.TrimSuffix(strings.TrimSuffix(s, "B"), "G")
+	case strings.HasSuffix(s, "GiB"):
+		mult = 1 << 30
+		s = strings.TrimSuffix(s, "GiB")
+	case strings.HasSuffix(s, "MB") || strings.HasSuffix(s, "M"):
+		mult = 1 << 20
+		s = strings.TrimSuffix(strings.TrimSuffix(s, "B"), "M")
+	case strings.HasSuffix(s, "MiB"):
+		mult = 1 << 20
+		s = strings.TrimSuffix(s, "MiB")
+	case strings.HasSuffix(s, "KB") || strings.HasSuffix(s, "K"):
+		mult = 1 << 10
+		s = strings.TrimSuffix(strings.TrimSuffix(s, "B"), "K")
+	case strings.HasSuffix(s, "KiB"):
+		mult = 1 << 10
+		s = strings.TrimSuffix(s, "KiB")
 	}
 	s = strings.TrimSpace(s)
 	n, err := strconv.ParseFloat(s, 64)
@@ -67,15 +79,6 @@ func parseByteSize(s string) (int, error) {
 		return 0, fmt.Errorf("invalid byte size %q", s)
 	}
 	return int(n * float64(mult)), nil
-}
-
-func trimSuffixOneOf(s string, suffixes ...string) string {
-	for _, suffix := range suffixes {
-		if strings.HasSuffix(s, suffix) {
-			return suffix
-		}
-	}
-	return ""
 }
 
 // runConfig groups the command-line settings that influence HTTP serving.
@@ -91,17 +94,10 @@ type runConfig struct {
 // performs a graceful shutdown. It returns after srv.Shutdown has returned so
 // callers can release resources deterministically.
 func run(ctx context.Context, log *slog.Logger, runner collector.Runner, config model.Config, rc runConfig, ln net.Listener) error {
-	c, err := collector.NewOsqueryCollector(runner, config.Metrics, log, collector.NewOsqueryCollectorOptions{
-		DefaultCacheTTL: rc.defaultCacheTTL,
-	})
+	c, err := collector.NewOsqueryCollector(ctx, runner, config.Metrics, log, rc.defaultCacheTTL)
 	if err != nil {
 		return fmt.Errorf("invalid metric configuration: %w", err)
 	}
-	// Propagate the shutdown context into running scrapes. When the context is
-	// cancelled (SIGINT/SIGTERM), in-flight osquery queries are interrupted
-	// safely: the Thrift client respects context cancellation and the runner
-	// only reconnects on transport errors, not on context cancellation.
-	c.ShutdownContext(ctx)
 
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(c)
@@ -180,7 +176,7 @@ func main() {
 	flag.Parse()
 
 	if *printVersion {
-		fmt.Println(version.Version)
+		fmt.Println(Version)
 		os.Exit(0)
 	}
 

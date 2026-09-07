@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -20,11 +21,11 @@ func TestCollectorCacheHitsAndMisses(t *testing.T) {
 		},
 	}
 
-	c, err := NewOsqueryCollector(fr, model.Metrics{
+	c, err := NewOsqueryCollector(context.Background(), fr, model.Metrics{
 		Gauges: []model.Gauge{
 			{Metric: model.Metric{Name: "ones", Help: "h", Querystring: "SELECT 1", ValueIdentifier: "count"}},
 		},
-	}, discardLogger(), NewOsqueryCollectorOptions{DefaultCacheTTL: 10 * time.Second})
+	}, discardLogger(), 10*time.Second)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -86,7 +87,7 @@ func TestCollectorCachePerQueryOverride(t *testing.T) {
 		t.Fatalf("ResolveQueryRefs failed: %v", err)
 	}
 
-	c, err := NewOsqueryCollector(fr, config.Metrics, discardLogger(), NewOsqueryCollectorOptions{DefaultCacheTTL: 0})
+	c, err := NewOsqueryCollector(context.Background(), fr, config.Metrics, discardLogger(), 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -131,7 +132,7 @@ func TestCollectorCachePerQueryGroupOverride(t *testing.T) {
 		t.Fatalf("ResolveQueryRefs failed: %v", err)
 	}
 
-	c, err := NewOsqueryCollector(fr, config.Metrics, discardLogger(), NewOsqueryCollectorOptions{DefaultCacheTTL: 0})
+	c, err := NewOsqueryCollector(context.Background(), fr, config.Metrics, discardLogger(), 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -174,7 +175,7 @@ func TestCollectorCacheConflictingTTLInGroupFails(t *testing.T) {
 		t.Fatalf("ResolveQueryRefs failed: %v", err)
 	}
 
-	_, err := NewOsqueryCollector(fr, config.Metrics, discardLogger(), NewOsqueryCollectorOptions{DefaultCacheTTL: 0})
+	_, err := NewOsqueryCollector(context.Background(), fr, config.Metrics, discardLogger(), 0)
 	if err == nil {
 		t.Fatal("expected error for conflicting cache_ttl in query group, got nil")
 	}
@@ -189,12 +190,12 @@ func TestCollectorCacheCountsOncePerQueryGroup(t *testing.T) {
 		},
 	}
 
-	c, err := NewOsqueryCollector(fr, model.Metrics{
+	c, err := NewOsqueryCollector(context.Background(), fr, model.Metrics{
 		Gauges: []model.Gauge{
 			{Metric: model.Metric{Name: "metric_a", Help: "h", Querystring: "SELECT shared", ValueIdentifier: "a"}},
 			{Metric: model.Metric{Name: "metric_b", Help: "h", Querystring: "SELECT shared", ValueIdentifier: "b"}},
 		},
-	}, discardLogger(), NewOsqueryCollectorOptions{DefaultCacheTTL: 10 * time.Second})
+	}, discardLogger(), 10*time.Second)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -230,11 +231,11 @@ func TestCollectorCacheDisabledByDefault(t *testing.T) {
 		},
 	}
 
-	c, err := NewOsqueryCollector(fr, model.Metrics{
+	c, err := NewOsqueryCollector(context.Background(), fr, model.Metrics{
 		Gauges: []model.Gauge{
 			{Metric: model.Metric{Name: "ones", Help: "h", Querystring: "SELECT 1", ValueIdentifier: "count"}},
 		},
-	}, discardLogger())
+	}, discardLogger(), 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
