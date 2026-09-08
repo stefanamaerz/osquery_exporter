@@ -331,6 +331,59 @@ func TestCollectorShutdownContextCancelsInFlightQuery(t *testing.T) {
 	}
 }
 
+// TestCollectorScrapeTimeoutExpires verifies that a short scrape timeout
+// cancels an in-flight query and consistently reports query_success=0 and
+// resultsets=0 for the metric.
+func TestCollectorScrapeTimeoutExpires(t *testing.T) {
+	br := &blockingRunner{started: make(chan struct{})}
+	m := model.Metrics{
+		Counters: []model.Counter{
+			{Metric: model.Metric{Name: "ones", Help: "ones", Querystring: "SELECT 1", ValueIdentifier: "count"}},
+		},
+	}
+	c, err := NewOsqueryCollector(context.Background(), br, m, discardLogger(), 0, 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("NewOsqueryCollector failed: %v", err)
+	}
+
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(c)
+
+	start := time.Now()
+	mfs, err := reg.Gather()
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("gather took too long (%v) to respect scrape timeout", elapsed)
+	}
+
+	var successVal, resultsetsVal float64 = -1, -1
+	for _, mf := range mfs {
+		if mf.GetName() != "osquery_exporter_query_success" && mf.GetName() != "osquery_exporter_resultsets" {
+			continue
+		}
+		for _, metric := range mf.GetMetric() {
+			for _, l := range metric.GetLabel() {
+				if l.GetName() == "name" && l.GetValue() == "ones" {
+					if mf.GetName() == "osquery_exporter_query_success" {
+						successVal = metric.GetGauge().GetValue()
+					} else {
+						resultsetsVal = metric.GetGauge().GetValue()
+					}
+				}
+			}
+		}
+	}
+	if successVal != 0 {
+		t.Fatalf("query_success = %v, want 0 after scrape timeout", successVal)
+	}
+	if resultsetsVal != 0 {
+		t.Fatalf("resultsets = %v, want 0 after scrape timeout", resultsetsVal)
+	}
+}
+
 type countingRunner struct {
 	fakeRunner
 	calls atomic.Int32
