@@ -44,8 +44,18 @@ Command-line flags:
     Config file (default "config.yaml")
 -web.listen-address string
     Address on which to expose metrics and web interface. (default ":9232")
+-web.max-header-bytes string
+    Maximum size of HTTP request headers, e.g. 4KB, 1MB. (default "8KB")
+-web.max-requests-in-flight int
+    Maximum number of simultaneous /metrics scrapes. 0 disables the limit. (default 2)
+-web.scrape-timeout string
+    Maximum duration for a single /metrics scrape, e.g. 30s, 2m. (default "60s")
 -web.telemetry-path string
     Path under which to expose metrics. (default "/metrics")
+-web.enable-runtime-golang-metrics bool
+    Expose Go runtime and process metrics on /metrics. (default true)
+-version
+    Print version and exit
 ```
 
 The configuration file is mandatory; flags have sensible defaults.

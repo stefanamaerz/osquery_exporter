@@ -104,13 +104,13 @@ type queryGroup struct {
 // OsqueryCollector represents a collector that collects metrics from a set of osquery queries. It implements
 // prometheus Collector
 type OsqueryCollector struct {
-	ctx              context.Context
-	runner           Runner
-	groups           map[string]*queryGroup
-	cache            *queryCache
-	defaultCacheTTL  time.Duration
-	maxScrapeTimeout time.Duration
-	log              *slog.Logger
+	ctx             context.Context
+	runner          Runner
+	groups          map[string]*queryGroup
+	cache           *queryCache
+	defaultCacheTTL time.Duration
+	scrapeTimeout   time.Duration
+	log             *slog.Logger
 	queryDurations   *prometheus.SummaryVec
 	success          *prometheus.GaugeVec
 	resultsets       *prometheus.GaugeVec
@@ -134,7 +134,7 @@ var reservedNames = map[string]struct{}{
 
 // NewOsqueryCollector creates an OsQueryCollector from a given osquery-runner and a set of metric definitions.
 // It fails fast if the config contains duplicate metric names or invalid metric descriptors.
-func NewOsqueryCollector(ctx context.Context, r Runner, m model.Metrics, log *slog.Logger, defaultCacheTTL time.Duration) (*OsqueryCollector, error) {
+func NewOsqueryCollector(ctx context.Context, r Runner, m model.Metrics, log *slog.Logger, defaultCacheTTL, scrapeTimeout time.Duration) (*OsqueryCollector, error) {
 	groups := make(map[string]*queryGroup)
 	names := make(map[string]struct{})
 
@@ -211,13 +211,13 @@ func NewOsqueryCollector(ctx context.Context, r Runner, m model.Metrics, log *sl
 	}
 
 	return &OsqueryCollector{
-		ctx:              ctx,
-		runner:           r,
-		groups:           groups,
-		cache:            newQueryCache(),
-		defaultCacheTTL:  defaultCacheTTL,
-		maxScrapeTimeout: 60 * time.Second,
-		log:              log,
+		ctx:             ctx,
+		runner:          r,
+		groups:          groups,
+		cache:           newQueryCache(),
+		defaultCacheTTL: defaultCacheTTL,
+		scrapeTimeout:   scrapeTimeout,
+		log:             log,
 		queryDurations: prometheus.NewSummaryVec(
 			prometheus.SummaryOpts{
 				Namespace: "osquery_exporter",
@@ -285,7 +285,7 @@ func (c *OsqueryCollector) Describe(ch chan<- *prometheus.Desc) {
 
 // Collect implements prometheus.Collector
 func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
-	ctx, cancel := context.WithTimeout(c.ctx, c.maxScrapeTimeout)
+	ctx, cancel := context.WithTimeout(c.ctx, c.scrapeTimeout)
 	defer cancel()
 
 	wg := sync.WaitGroup{}

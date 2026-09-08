@@ -121,7 +121,7 @@ func TestNewOsqueryCollectorDuplicateName(t *testing.T) {
 			{Metric: model.Metric{Name: "dup", Help: "second", Querystring: "SELECT 2", ValueIdentifier: "v"}},
 		},
 	}
-	if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0); err == nil {
+	if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0, 60*time.Second); err == nil {
 		t.Fatal("expected error for duplicate metric name")
 	}
 }
@@ -132,7 +132,7 @@ func TestNewOsqueryCollectorInvalidDescriptor(t *testing.T) {
 			{Metric: model.Metric{Name: "", Help: "empty", Querystring: "SELECT 1", ValueIdentifier: "v"}},
 		},
 	}
-	if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0); err == nil {
+	if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0, 60*time.Second); err == nil {
 		t.Fatal("expected error for empty metric name")
 	}
 }
@@ -148,7 +148,7 @@ func TestCollectorCollectSuccess(t *testing.T) {
 			{Metric: model.Metric{Name: "ones", Help: "ones", Querystring: "SELECT 1", ValueIdentifier: "count"}},
 		},
 	}
-	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0)
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestCollectorCollectQueryError(t *testing.T) {
 			{Metric: model.Metric{Name: "boom", Help: "boom", Querystring: "SELECT boom", ValueIdentifier: "count"}},
 		},
 	}
-	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0)
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestCollectorCollectQueryError(t *testing.T) {
 
 func TestCollectorDescribe(t *testing.T) {
 	fr := &fakeRunner{}
-	c, err := NewOsqueryCollector(context.Background(), fr, model.Metrics{}, discardLogger(), 0)
+	c, err := NewOsqueryCollector(context.Background(), fr, model.Metrics{}, discardLogger(), 0, 60*time.Second)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestNewOsqueryCollectorReservedName(t *testing.T) {
 				{Metric: model.Metric{Name: reserved, Help: "h", Querystring: "SELECT 1 AS v", ValueIdentifier: "v"}},
 			},
 		}
-		if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0); err == nil {
+		if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0, 60*time.Second); err == nil {
 			t.Fatalf("expected error for reserved metric name %q", reserved)
 		}
 	}
@@ -265,7 +265,7 @@ func TestGatherPedantic(t *testing.T) {
 			}},
 		},
 	}
-	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0)
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestCollectorShutdownContextCancelsInFlightQuery(t *testing.T) {
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	c, err := NewOsqueryCollector(ctx, br, m, discardLogger(), 0)
+	c, err := NewOsqueryCollector(ctx, br, m, discardLogger(), 0, 60*time.Second)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -331,6 +331,59 @@ func TestCollectorShutdownContextCancelsInFlightQuery(t *testing.T) {
 	}
 }
 
+// TestCollectorScrapeTimeoutExpires verifies that a short scrape timeout
+// cancels an in-flight query and consistently reports query_success=0 and
+// resultsets=0 for the metric.
+func TestCollectorScrapeTimeoutExpires(t *testing.T) {
+	br := &blockingRunner{started: make(chan struct{})}
+	m := model.Metrics{
+		Counters: []model.Counter{
+			{Metric: model.Metric{Name: "ones", Help: "ones", Querystring: "SELECT 1", ValueIdentifier: "count"}},
+		},
+	}
+	c, err := NewOsqueryCollector(context.Background(), br, m, discardLogger(), 0, 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("NewOsqueryCollector failed: %v", err)
+	}
+
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(c)
+
+	start := time.Now()
+	mfs, err := reg.Gather()
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("gather took too long (%v) to respect scrape timeout", elapsed)
+	}
+
+	var successVal, resultsetsVal float64 = -1, -1
+	for _, mf := range mfs {
+		if mf.GetName() != "osquery_exporter_query_success" && mf.GetName() != "osquery_exporter_resultsets" {
+			continue
+		}
+		for _, metric := range mf.GetMetric() {
+			for _, l := range metric.GetLabel() {
+				if l.GetName() == "name" && l.GetValue() == "ones" {
+					if mf.GetName() == "osquery_exporter_query_success" {
+						successVal = metric.GetGauge().GetValue()
+					} else {
+						resultsetsVal = metric.GetGauge().GetValue()
+					}
+				}
+			}
+		}
+	}
+	if successVal != 0 {
+		t.Fatalf("query_success = %v, want 0 after scrape timeout", successVal)
+	}
+	if resultsetsVal != 0 {
+		t.Fatalf("resultsets = %v, want 0 after scrape timeout", resultsetsVal)
+	}
+}
+
 type countingRunner struct {
 	fakeRunner
 	calls atomic.Int32
@@ -363,7 +416,7 @@ func TestCollectorDeduplicatesSharedQuery(t *testing.T) {
 			}},
 		},
 	}
-	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0)
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -404,7 +457,7 @@ func TestGatherDuplicateLabelSetFailsSuccess(t *testing.T) {
 			}},
 		},
 	}
-	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0)
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
