@@ -144,6 +144,19 @@ metrics:
 - <https://prometheus.io/docs/concepts/metric_types/>
 - <https://prometheus.io/docs/practices/naming/>
 
+### Staggering query execution
+
+When the cache is cold or disabled, all query groups run at the start of a `/metrics` scrape. This can create a latency burst inside osqueryd because queries for the same table are serialized. Set `runtime.query_stagger` to add a small fixed delay between query group launches within a single scrape:
+
+```yaml
+runtime:
+  socket_path: "/var/run/osquery/osquery.em"
+  timeout: 10s
+  query_stagger: 20ms
+```
+
+A value of `0` or omitting the key disables staggering. The stagger only affects actual query executions, not cache hits.
+
 ### Caching query results
 
 Frequent Prometheus scrapes can generate excessive osqueryd load because every scrape currently runs every query. Set `runtime.cache_ttl` to cache each query's result for the configured duration:

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -121,7 +123,7 @@ func TestNewOsqueryCollectorDuplicateName(t *testing.T) {
 			{Metric: model.Metric{Name: "dup", Help: "second", Querystring: "SELECT 2", ValueIdentifier: "v"}},
 		},
 	}
-	if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0, 60*time.Second); err == nil {
+	if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0, 60*time.Second, 0); err == nil {
 		t.Fatal("expected error for duplicate metric name")
 	}
 }
@@ -132,7 +134,7 @@ func TestNewOsqueryCollectorInvalidDescriptor(t *testing.T) {
 			{Metric: model.Metric{Name: "", Help: "empty", Querystring: "SELECT 1", ValueIdentifier: "v"}},
 		},
 	}
-	if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0, 60*time.Second); err == nil {
+	if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0, 60*time.Second, 0); err == nil {
 		t.Fatal("expected error for empty metric name")
 	}
 }
@@ -148,7 +150,7 @@ func TestCollectorCollectSuccess(t *testing.T) {
 			{Metric: model.Metric{Name: "ones", Help: "ones", Querystring: "SELECT 1", ValueIdentifier: "count"}},
 		},
 	}
-	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second)
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second, 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -178,7 +180,7 @@ func TestCollectorCollectQueryError(t *testing.T) {
 			{Metric: model.Metric{Name: "boom", Help: "boom", Querystring: "SELECT boom", ValueIdentifier: "count"}},
 		},
 	}
-	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second)
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second, 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -200,7 +202,7 @@ func TestCollectorCollectQueryError(t *testing.T) {
 
 func TestCollectorDescribe(t *testing.T) {
 	fr := &fakeRunner{}
-	c, err := NewOsqueryCollector(context.Background(), fr, model.Metrics{}, discardLogger(), 0, 60*time.Second)
+	c, err := NewOsqueryCollector(context.Background(), fr, model.Metrics{}, discardLogger(), 0, 60*time.Second, 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -225,7 +227,7 @@ func TestNewOsqueryCollectorReservedName(t *testing.T) {
 				{Metric: model.Metric{Name: reserved, Help: "h", Querystring: "SELECT 1 AS v", ValueIdentifier: "v"}},
 			},
 		}
-		if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0, 60*time.Second); err == nil {
+		if _, err := NewOsqueryCollector(context.Background(), &fakeRunner{}, m, discardLogger(), 0, 60*time.Second, 0); err == nil {
 			t.Fatalf("expected error for reserved metric name %q", reserved)
 		}
 	}
@@ -265,7 +267,7 @@ func TestGatherPedantic(t *testing.T) {
 			}},
 		},
 	}
-	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second)
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second, 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -295,7 +297,7 @@ func TestCollectorShutdownContextCancelsInFlightQuery(t *testing.T) {
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	c, err := NewOsqueryCollector(ctx, br, m, discardLogger(), 0, 60*time.Second)
+	c, err := NewOsqueryCollector(ctx, br, m, discardLogger(), 0, 60*time.Second, 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -341,7 +343,7 @@ func TestCollectorScrapeTimeoutExpires(t *testing.T) {
 			{Metric: model.Metric{Name: "ones", Help: "ones", Querystring: "SELECT 1", ValueIdentifier: "count"}},
 		},
 	}
-	c, err := NewOsqueryCollector(context.Background(), br, m, discardLogger(), 0, 50*time.Millisecond)
+	c, err := NewOsqueryCollector(context.Background(), br, m, discardLogger(), 0, 50*time.Millisecond, 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -389,6 +391,95 @@ type countingRunner struct {
 	calls atomic.Int32
 }
 
+type recordingRunner struct {
+	mu      sync.Mutex
+	started []time.Time
+	results map[string]*model.OsqueryResult
+}
+
+func (r *recordingRunner) Run(ctx context.Context, query string) (*model.OsqueryResult, error) {
+	r.mu.Lock()
+	r.started = append(r.started, time.Now())
+	r.mu.Unlock()
+	return r.results[query], nil
+}
+
+// TestCollectorQueryStagger spaces query group launches by the configured
+// stagger duration.
+func TestCollectorQueryStagger(t *testing.T) {
+	fr := &recordingRunner{
+		results: map[string]*model.OsqueryResult{
+			"SELECT 1": {Items: []model.OsqueryItem{{"count": "1"}}, Runtime: time.Millisecond},
+			"SELECT 2": {Items: []model.OsqueryItem{{"count": "2"}}, Runtime: time.Millisecond},
+			"SELECT 3": {Items: []model.OsqueryItem{{"count": "3"}}, Runtime: time.Millisecond},
+		},
+	}
+	m := model.Metrics{
+		Counters: []model.Counter{
+			{Metric: model.Metric{Name: "one", Help: "h", Querystring: "SELECT 1", ValueIdentifier: "count"}},
+			{Metric: model.Metric{Name: "two", Help: "h", Querystring: "SELECT 2", ValueIdentifier: "count"}},
+			{Metric: model.Metric{Name: "three", Help: "h", Querystring: "SELECT 3", ValueIdentifier: "count"}},
+		},
+	}
+	stagger := 50 * time.Millisecond
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second, stagger)
+	if err != nil {
+		t.Fatalf("NewOsqueryCollector failed: %v", err)
+	}
+
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(c)
+	if _, err := reg.Gather(); err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+
+	fr.mu.Lock()
+	starts := append([]time.Time(nil), fr.started...)
+	fr.mu.Unlock()
+
+	if len(starts) != 3 {
+		t.Fatalf("expected 3 query starts, got %d", len(starts))
+	}
+	slices.SortFunc(starts, func(a, b time.Time) int { return a.Compare(b) })
+	for i := 1; i < len(starts); i++ {
+		gap := starts[i].Sub(starts[i-1])
+		if gap < stagger {
+			t.Fatalf("gap %d (%d) < stagger %v", i, gap, stagger)
+		}
+	}
+}
+
+// TestCollectorNoStaggerWhenDisabled verifies that a zero stagger does not
+// unnecessarily delay queries.
+func TestCollectorNoStaggerWhenDisabled(t *testing.T) {
+	fr := &recordingRunner{
+		results: map[string]*model.OsqueryResult{
+			"SELECT 1": {Items: []model.OsqueryItem{{"count": "1"}}, Runtime: time.Millisecond},
+			"SELECT 2": {Items: []model.OsqueryItem{{"count": "2"}}, Runtime: time.Millisecond},
+		},
+	}
+	m := model.Metrics{
+		Counters: []model.Counter{
+			{Metric: model.Metric{Name: "one", Help: "h", Querystring: "SELECT 1", ValueIdentifier: "count"}},
+			{Metric: model.Metric{Name: "two", Help: "h", Querystring: "SELECT 2", ValueIdentifier: "count"}},
+		},
+	}
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second, 0)
+	if err != nil {
+		t.Fatalf("NewOsqueryCollector failed: %v", err)
+	}
+
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(c)
+	start := time.Now()
+	if _, err := reg.Gather(); err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("gather took %v with stagger disabled", elapsed)
+	}
+}
+
 func (c *countingRunner) Run(ctx context.Context, query string) (*model.OsqueryResult, error) {
 	c.calls.Add(1)
 	return c.fakeRunner.Run(ctx, query)
@@ -416,7 +507,7 @@ func TestCollectorDeduplicatesSharedQuery(t *testing.T) {
 			}},
 		},
 	}
-	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second)
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second, 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
@@ -457,7 +548,7 @@ func TestGatherDuplicateLabelSetFailsSuccess(t *testing.T) {
 			}},
 		},
 	}
-	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second)
+	c, err := NewOsqueryCollector(context.Background(), fr, m, discardLogger(), 0, 60*time.Second, 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}

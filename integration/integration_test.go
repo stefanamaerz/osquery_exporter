@@ -67,7 +67,7 @@ func TestCollectorWithRealOsqueryd(t *testing.T) {
 			{Metric: model.Metric{Name: "osquery_info_up", Help: "up metric", Querystring: "SELECT 1 AS up FROM osquery_info", ValueIdentifier: "up"}},
 		},
 	}
-	c, err := collector.NewOsqueryCollector(context.Background(), r, m, infoLog(), 0, 60*time.Second)
+	c, err := collector.NewOsqueryCollector(context.Background(), r, m, infoLog(), 0, 60*time.Second, 0)
 	if err != nil {
 		t.Fatalf("NewOsqueryCollector failed: %v", err)
 	}
