@@ -14,6 +14,21 @@ import (
 	osquerygen "github.com/osquery/osquery-go/gen/osquery"
 )
 
+type retryDialer struct {
+	calls  int32
+	failIn int32 // fail on calls <= failIn, succeed after
+}
+
+func (f *retryDialer) Dial() (interface {
+	QueryContext(ctx context.Context, sql string) (*osquerygen.ExtensionResponse, error)
+	Close()
+}, error) {
+	if atomic.AddInt32(&f.calls, 1) <= f.failIn {
+		return nil, thrift.NewTTransportException(thrift.NOT_OPEN, "connection refused")
+	}
+	return &fakeThriftQuerier{}, nil
+}
+
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 }
@@ -50,12 +65,42 @@ func TestNewThriftRunnerInvalidTimeout(t *testing.T) {
 	}
 }
 
-func TestNewThriftRunnerMissingSocket(t *testing.T) {
-	dir := t.TempDir()
-	socket := dir + "/nonexistent.em"
-	_, err := NewThriftRunner(socket, "100ms", discardLogger())
+func TestNewThriftRunnerRetriesThenConnects(t *testing.T) {
+	fd := &retryDialer{failIn: 2}
+	r := &ThriftRunner{
+		socketPath: "/var/run/osquery/osquery.em",
+		timeout:    100 * time.Millisecond,
+		log:        discardLogger(),
+		dialer:     fd.Dial,
+	}
+	if err := r.connectWithRetry(2 * time.Second); err != nil {
+		t.Fatalf("expected connection after retry, got error: %v", err)
+	}
+	calls := atomic.LoadInt32(&fd.calls)
+	if calls != 3 {
+		t.Fatalf("expected 3 dial attempts, got %d", calls)
+	}
+}
+
+func TestNewThriftRunnerRetriesUntilDeadline(t *testing.T) {
+	fd := &retryDialer{failIn: 1 << 30}
+	r := &ThriftRunner{
+		socketPath: "/var/run/osquery/osquery.em",
+		timeout:    100 * time.Millisecond,
+		log:        discardLogger(),
+		dialer:     fd.Dial,
+	}
+	start := time.Now()
+	err := r.connectWithRetry(startupRetryDeadline)
 	if err == nil {
-		t.Fatal("expected error for missing socket, got nil")
+		t.Fatal("expected error after deadline, got nil")
+	}
+	if d := time.Since(start); d < startupRetryDeadline-2*time.Second {
+		t.Fatalf("expected retry deadline ~%s, got %s", startupRetryDeadline, d)
+	}
+	calls := atomic.LoadInt32(&fd.calls)
+	if calls < 2 {
+		t.Fatalf("expected multiple dial attempts, got %d", calls)
 	}
 }
 
