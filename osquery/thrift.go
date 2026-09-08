@@ -122,9 +122,8 @@ func (r *ThriftRunner) maybeReconnect(gen int) error {
 	return r.reconnect()
 }
 
-// isTransportError reports whether err is a transport/socket-level failure
-// that may benefit from reconnecting, as opposed to a well-formed osquery
-// error response, a SQL-level error, or a context cancellation/deadline.
+// isTransportError reports whether err is a Thrift transport or protocol
+// failure that may benefit from reconnecting.
 func isTransportError(err error) bool {
 	if err == nil {
 		return false
@@ -134,8 +133,6 @@ func isTransportError(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	// Thrift transport and protocol exceptions indicate the underlying
-	// socket/read/write machinery failed. Treat those as reconnectable.
 	var te thrift.TTransportException
 	if errors.As(err, &te) {
 		return true

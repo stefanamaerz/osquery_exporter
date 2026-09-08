@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -291,7 +290,6 @@ func TestVersionFlagUsesPackageVersion(t *testing.T) {
 	wantVersion := "v9.9.9-test"
 	ldflags := "-X github.com/stefanamaerz/osquery_exporter/version.Version=" + wantVersion
 	cmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", bin, ".")
-	cmd.Dir = ".." // main package lives one directory up from this test file
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go build failed: %v\n%s", err, out)
