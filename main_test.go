@@ -6,12 +6,47 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stefanamaerz/osquery_exporter/model"
+	"github.com/stefanamaerz/osquery_exporter/version"
 )
+
+func TestVersionFlagUsesPackageVersion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping binary build in short mode")
+	}
+	testVersion := "v9.9.9-test"
+
+	tmpDir := t.TempDir()
+	bin := filepath.Join(tmpDir, "osquery_exporter")
+
+	cmd := exec.Command("go", "build", "-ldflags", "-X github.com/stefanamaerz/osquery_exporter/version.Version="+testVersion, "-o", bin, ".")
+	cmd.Dir = "."
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("go build failed: %v", err)
+	}
+
+	out, err := exec.Command(bin, "-version").Output()
+	if err != nil {
+		t.Fatalf("running binary failed: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != testVersion {
+		t.Fatalf("version output = %q, want %q", got, testVersion)
+	}
+}
+
+func TestVersionPackageDefault(t *testing.T) {
+	if version.Version == "" {
+		t.Fatal("version.Version should not be empty")
+	}
+}
 
 func TestParseCacheTTL(t *testing.T) {
 	tests := []struct {
