@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"os"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/apache/thrift/lib/go/thrift"
 	osquerygen "github.com/osquery/osquery-go/gen/osquery"
 )
 
@@ -143,7 +145,7 @@ func TestThriftRunnerContextTimeoutNoReconnect(t *testing.T) {
 // dial fails (no real socket), so Run returns an error, but the client must
 // not be closed because the dial failed before any swap.
 func TestThriftRunnerTransportErrorReconnectAttempt(t *testing.T) {
-	fake := &fakeThriftQuerier{err: errors.New("connection reset")}
+	fake := &fakeThriftQuerier{err: thrift.NewTTransportException(thrift.TIMED_OUT, "connection reset")}
 	r := newTestRunner(50 * time.Millisecond)
 	r.client = fake
 
@@ -157,6 +159,69 @@ func TestThriftRunnerTransportErrorReconnectAttempt(t *testing.T) {
 	// The failed reconnect must not have closed the still-current client.
 	if got := atomic.LoadInt32(&fake.closes); got != 0 {
 		t.Fatalf("closes = %d, want 0 (failed dial swaps nothing)", got)
+	}
+}
+
+// A protocol exception (e.g. corrupt response) is not a transport error, so
+// Run must NOT reconnect or retry.
+func TestThriftRunnerProtocolErrorNoReconnect(t *testing.T) {
+	fake := &fakeThriftQuerier{err: thrift.NewTProtocolException(errors.New("invalid thrift response"))}
+	r := newTestRunner(50 * time.Millisecond)
+	r.client = fake
+
+	_, err := r.Run(context.Background(), "SELECT 1")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if got := atomic.LoadInt32(&fake.queries); got != 1 {
+		t.Fatalf("queries = %d, want 1 (no retry on protocol error)", got)
+	}
+	if got := atomic.LoadInt32(&fake.closes); got != 0 {
+		t.Fatalf("closes = %d, want 0 (no reconnect on protocol error)", got)
+	}
+}
+
+// A generic non-transport Go error must not be treated as transport-level.
+func TestThriftRunnerGenericErrorNoReconnect(t *testing.T) {
+	fake := &fakeThriftQuerier{err: errors.New("boom")}
+	r := newTestRunner(50 * time.Millisecond)
+	r.client = fake
+
+	_, err := r.Run(context.Background(), "SELECT 1")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if got := atomic.LoadInt32(&fake.queries); got != 1 {
+		t.Fatalf("queries = %d, want 1 (no retry on generic error)", got)
+	}
+	if got := atomic.LoadInt32(&fake.closes); got != 0 {
+		t.Fatalf("closes = %d, want 0 (no reconnect on generic error)", got)
+	}
+}
+
+// isTransportError must treat Thrift transport and protocol exceptions as
+// transport-level and leave context errors as non-reconnectable.
+func TestIsTransportError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"context canceled", context.Canceled, false},
+		{"context deadline", context.DeadlineExceeded, false},
+		{"generic error", errors.New("boom"), false},
+		{"thrift transport", thrift.NewTTransportException(thrift.TIMED_OUT, "deadline"), true},
+		{"thrift protocol", thrift.NewTProtocolException(errors.New("parse error")), true},
+		{"net error", &net.AddrError{Err: "whoops"}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isTransportError(tc.err); got != tc.want {
+				t.Fatalf("isTransportError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 
