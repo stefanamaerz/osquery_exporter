@@ -14,17 +14,16 @@ import (
 	osquerygen "github.com/osquery/osquery-go/gen/osquery"
 )
 
-type failingDialer struct {
-	calls   int32
-	succeed bool
+type retryDialer struct {
+	calls  int32
+	failIn int32 // fail on calls <= failIn, succeed after
 }
 
-func (f *failingDialer) Dial() (interface {
+func (f *retryDialer) Dial() (interface {
 	QueryContext(ctx context.Context, sql string) (*osquerygen.ExtensionResponse, error)
 	Close()
 }, error) {
-	atomic.AddInt32(&f.calls, 1)
-	if !f.succeed {
+	if atomic.AddInt32(&f.calls, 1) <= f.failIn {
 		return nil, thrift.NewTTransportException(thrift.NOT_OPEN, "connection refused")
 	}
 	return &fakeThriftQuerier{}, nil
@@ -67,29 +66,24 @@ func TestNewThriftRunnerInvalidTimeout(t *testing.T) {
 }
 
 func TestNewThriftRunnerRetriesThenConnects(t *testing.T) {
-	fd := &failingDialer{}
+	fd := &retryDialer{failIn: 2}
 	r := &ThriftRunner{
 		socketPath: "/var/run/osquery/osquery.em",
 		timeout:    100 * time.Millisecond,
 		log:        discardLogger(),
 		dialer:     fd.Dial,
 	}
-	go func() {
-		time.Sleep(600 * time.Millisecond)
-		fd.succeed = true
-	}()
-
 	if err := r.connectWithRetry(2 * time.Second); err != nil {
 		t.Fatalf("expected connection after retry, got error: %v", err)
 	}
 	calls := atomic.LoadInt32(&fd.calls)
-	if calls < 2 {
-		t.Fatalf("expected multiple dial attempts, got %d", calls)
+	if calls != 3 {
+		t.Fatalf("expected 3 dial attempts, got %d", calls)
 	}
 }
 
 func TestNewThriftRunnerRetriesUntilDeadline(t *testing.T) {
-	fd := &failingDialer{}
+	fd := &retryDialer{failIn: 1 << 30}
 	r := &ThriftRunner{
 		socketPath: "/var/run/osquery/osquery.em",
 		timeout:    100 * time.Millisecond,
