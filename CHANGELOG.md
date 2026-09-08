@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.1.0] - 2026-09-08
+
 ### Fixed
 - Fixed version string output regression where release binaries printed local `main.Version` ("dev") instead of build-injected `version.Version` ([#54], [#52]).
 - Refined Thrift reconnect logic to only reconnect on actual transport-level and protocol failures, preventing ordinary SQL failures and context cancellations from tearing down the shared connection ([#54], [#53]).
@@ -86,7 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added GitHub Actions CI workflows for testing and `.deb` packaging ([#4]).
 - Configured `.gitignore` for coverage outputs and set up Dependabot ([#5]).
 
-[Unreleased]: https://github.com/stefanamaerz/osquery_exporter/compare/v0.0.7...HEAD
+[Unreleased]: https://github.com/stefanamaerz/osquery_exporter/compare/v0.1.0...HEAD
+[v0.1.0]: https://github.com/stefanamaerz/osquery_exporter/compare/v0.0.7...v0.1.0
 [v0.0.7]: https://github.com/stefanamaerz/osquery_exporter/compare/v0.0.6...v0.0.7
 [v0.0.6]: https://github.com/stefanamaerz/osquery_exporter/compare/v0.0.5...v0.0.6
 [v0.0.5]: https://github.com/stefanamaerz/osquery_exporter/compare/v0.0.4...v0.0.5
