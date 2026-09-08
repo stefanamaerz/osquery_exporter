@@ -85,13 +85,14 @@ type runConfig struct {
 	maxRequestsInFlight    int
 	maxHeaderBytes         int
 	defaultCacheTTL        time.Duration
+	scrapeTimeout          time.Duration
 }
 
 // run builds the collector and HTTP server, serves until ctx is cancelled, then
 // performs a graceful shutdown. It returns after srv.Shutdown has returned so
 // callers can release resources deterministically.
 func run(ctx context.Context, log *slog.Logger, runner collector.Runner, config model.Config, rc runConfig, ln net.Listener) error {
-	c, err := collector.NewOsqueryCollector(ctx, runner, config.Metrics, log, rc.defaultCacheTTL)
+	c, err := collector.NewOsqueryCollector(ctx, runner, config.Metrics, log, rc.defaultCacheTTL, rc.scrapeTimeout)
 	if err != nil {
 		return fmt.Errorf("invalid metric configuration: %w", err)
 	}
@@ -109,7 +110,7 @@ func run(ctx context.Context, log *slog.Logger, runner collector.Runner, config 
 		ErrorHandling:       promhttp.ContinueOnError,
 		ErrorLog:            slog.NewLogLogger(log.Handler(), slog.LevelError),
 		MaxRequestsInFlight: rc.maxRequestsInFlight,
-		Timeout:             60 * time.Second,
+		Timeout:             rc.scrapeTimeout,
 		Registry:            prometheus.DefaultRegisterer, // exposes promhttp_metric_handler_errors_total
 	})
 
@@ -168,6 +169,7 @@ func main() {
 		enableRuntimeGoMetrics = flag.Bool("web.enable-runtime-golang-metrics", true, "Expose Go runtime and process metrics on /metrics.")
 		maxRequestsInFlight    = flag.Int("web.max-requests-in-flight", 2, "Maximum number of simultaneous /metrics scrapes. 0 disables the limit.")
 		maxHeaderBytesFlag     = flag.String("web.max-header-bytes", "8KB", "Maximum size of HTTP request headers, e.g. 4KB, 1MB.")
+		scrapeTimeoutFlag      = flag.String("web.scrape-timeout", "60s", "Maximum duration for a single /metrics scrape, e.g. 30s, 2m.")
 		printVersion           = flag.Bool("version", false, "Print version and exit")
 	)
 	flag.Parse()
@@ -224,6 +226,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	scrapeTimeout, err := time.ParseDuration(*scrapeTimeoutFlag)
+	if err != nil {
+		log.Error("invalid web.scrape-timeout", "value", *scrapeTimeoutFlag, "error", err)
+		os.Exit(1)
+	}
+	if scrapeTimeout <= 0 {
+		log.Error("web.scrape-timeout must be positive", "value", *scrapeTimeoutFlag)
+		os.Exit(1)
+	}
+
 	ln, err := net.Listen("tcp", *listenAddress)
 	if err != nil {
 		log.Error("failed to listen", "address", *listenAddress, "error", err)
@@ -236,6 +248,7 @@ func main() {
 		maxRequestsInFlight:    *maxRequestsInFlight,
 		maxHeaderBytes:         maxHeaderBytes,
 		defaultCacheTTL:        defaultCacheTTL,
+		scrapeTimeout:          scrapeTimeout,
 	}
 
 	if err := run(ctx, log, runner, config, rc, ln); err != nil {
