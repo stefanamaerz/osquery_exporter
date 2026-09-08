@@ -22,12 +22,9 @@ import (
 	"github.com/stefanamaerz/osquery_exporter/collector"
 	"github.com/stefanamaerz/osquery_exporter/model"
 	"github.com/stefanamaerz/osquery_exporter/osquery"
+	"github.com/stefanamaerz/osquery_exporter/version"
 	"gopkg.in/yaml.v3"
 )
-
-// Version is the osquery_exporter version. It is overridden by the linker when
-// built with -ldflags "-X main.Version=<value>".
-var Version = "dev"
 
 // shutdownGracePeriod is the maximum time graceful shutdown waits for
 // in-flight HTTP requests and osquery queries to finish.
@@ -176,7 +173,7 @@ func main() {
 	flag.Parse()
 
 	if *printVersion {
-		fmt.Println(Version)
+		fmt.Println(version.Version)
 		os.Exit(0)
 	}
 
