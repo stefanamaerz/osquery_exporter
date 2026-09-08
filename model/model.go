@@ -18,9 +18,10 @@ type Config struct {
 
 // OsQueryRuntime holds the information for connecting to osqueryd's Thrift socket.
 type OsQueryRuntime struct {
-	SocketPath string `yaml:"socket_path"`
-	Timeout    string `yaml:"timeout"`
-	CacheTTL   string `yaml:"cache_ttl"`
+	SocketPath  string `yaml:"socket_path"`
+	Timeout     string `yaml:"timeout"`
+	CacheTTL    string `yaml:"cache_ttl"`
+	QueryStagger string `yaml:"query_stagger"`
 }
 
 // Query defines a shared, named osquery SQL statement that can be referenced

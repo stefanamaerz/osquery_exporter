@@ -86,13 +86,14 @@ type runConfig struct {
 	maxHeaderBytes         int
 	defaultCacheTTL        time.Duration
 	scrapeTimeout          time.Duration
+	queryStagger           time.Duration
 }
 
 // run builds the collector and HTTP server, serves until ctx is cancelled, then
 // performs a graceful shutdown. It returns after srv.Shutdown has returned so
 // callers can release resources deterministically.
 func run(ctx context.Context, log *slog.Logger, runner collector.Runner, config model.Config, rc runConfig, ln net.Listener) error {
-	c, err := collector.NewOsqueryCollector(ctx, runner, config.Metrics, log, rc.defaultCacheTTL, rc.scrapeTimeout)
+	c, err := collector.NewOsqueryCollector(ctx, runner, config.Metrics, log, rc.defaultCacheTTL, rc.scrapeTimeout, rc.queryStagger)
 	if err != nil {
 		return fmt.Errorf("invalid metric configuration: %w", err)
 	}
@@ -199,6 +200,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	queryStagger, err := parseCacheTTL(config.OsQueryRuntime.QueryStagger)
+	if err != nil {
+		log.Error("invalid runtime.query_stagger", "value", config.OsQueryRuntime.QueryStagger, "error", err)
+		os.Exit(1)
+	}
+
 	if config.OsQueryRuntime.SocketPath == "" {
 		log.Error("missing required runtime.socket_path")
 		os.Exit(1)
@@ -249,6 +256,7 @@ func main() {
 		maxHeaderBytes:         maxHeaderBytes,
 		defaultCacheTTL:        defaultCacheTTL,
 		scrapeTimeout:          scrapeTimeout,
+		queryStagger:           queryStagger,
 	}
 
 	if err := run(ctx, log, runner, config, rc, ln); err != nil {
