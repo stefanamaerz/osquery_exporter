@@ -40,7 +40,19 @@ type ThriftRunner struct {
 	// lastReconnectFailure is the time of the most recent failed reconnect.
 	// Reconnect attempts are suppressed until reconnectCooldown has elapsed.
 	lastReconnectFailure time.Time
+	// dialer is an optional test seam. When nil the real osquery-go client is
+	// used.
+	dialer func() (interface {
+		QueryContext(ctx context.Context, sql string) (*osquerygen.ExtensionResponse, error)
+		Close()
+	}, error)
 }
+
+// startupRetryDeadline is the maximum time NewThriftRunner will retry dial
+// errors that look like a socket ownership/availability race (ENOENT, EACCES,
+// ECONNREFUSED). This outlasts osqueryd startup and the ExecStartPost script
+// that fixes socket permissions.
+const startupRetryDeadline = 30 * time.Second
 
 // NewThriftRunner creates a runner that connects to osqueryd's Thrift socket.
 func NewThriftRunner(socketPath, timeout string, log *slog.Logger) (*ThriftRunner, error) {
@@ -58,10 +70,36 @@ func NewThriftRunner(socketPath, timeout string, log *slog.Logger) (*ThriftRunne
 		timeout:    to,
 		log:        log,
 	}
-	if err := r.reconnect(); err != nil {
+	if err := r.connectWithRetry(startupRetryDeadline); err != nil {
 		return nil, err
 	}
 	return r, nil
+}
+
+// connectWithRetry dials the socket, retrying only on errors that indicate the
+// socket is not yet ready or accessible. Configuration/validation errors fail
+// immediately.
+func (r *ThriftRunner) connectWithRetry(deadline time.Duration) error {
+	end := time.Now().Add(deadline)
+	for {
+		err := r.reconnect()
+		if err == nil {
+			return nil
+		}
+		if !isRetryableDialError(err) || time.Now().After(end) {
+			return err
+		}
+		r.log.Info("osqueryd socket not ready, retrying", "socket", r.socketPath, "error", err)
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// isRetryableDialError reports whether err is a transient socket-availability
+// error from a Thrift dial (connection refused, no such file, permission
+// denied). Errors from validateSocketPath are not retryable.
+func isRetryableDialError(err error) bool {
+	var te thrift.TTransportException
+	return errors.As(err, &te)
 }
 
 // dial creates a new client. It performs blocking network I/O and must never
@@ -70,6 +108,9 @@ func (r *ThriftRunner) dial() (interface {
 	QueryContext(ctx context.Context, sql string) (*osquerygen.ExtensionResponse, error)
 	Close()
 }, error) {
+	if r.dialer != nil {
+		return r.dialer()
+	}
 	return osquerygo.NewClient(r.socketPath, r.timeout,
 		osquerygo.DefaultWaitTime(r.timeout),
 		osquerygo.MaxWaitTime(r.timeout),
