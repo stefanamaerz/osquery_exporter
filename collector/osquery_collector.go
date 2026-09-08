@@ -110,6 +110,7 @@ type OsqueryCollector struct {
 	cache           *queryCache
 	defaultCacheTTL time.Duration
 	scrapeTimeout   time.Duration
+	stagger         time.Duration
 	log             *slog.Logger
 	queryDurations   *prometheus.SummaryVec
 	success          *prometheus.GaugeVec
@@ -134,7 +135,7 @@ var reservedNames = map[string]struct{}{
 
 // NewOsqueryCollector creates an OsQueryCollector from a given osquery-runner and a set of metric definitions.
 // It fails fast if the config contains duplicate metric names or invalid metric descriptors.
-func NewOsqueryCollector(ctx context.Context, r Runner, m model.Metrics, log *slog.Logger, defaultCacheTTL, scrapeTimeout time.Duration) (*OsqueryCollector, error) {
+func NewOsqueryCollector(ctx context.Context, r Runner, m model.Metrics, log *slog.Logger, defaultCacheTTL, scrapeTimeout, stagger time.Duration) (*OsqueryCollector, error) {
 	groups := make(map[string]*queryGroup)
 	names := make(map[string]struct{})
 
@@ -217,6 +218,7 @@ func NewOsqueryCollector(ctx context.Context, r Runner, m model.Metrics, log *sl
 		cache:           newQueryCache(),
 		defaultCacheTTL: defaultCacheTTL,
 		scrapeTimeout:   scrapeTimeout,
+		stagger:         stagger,
 		log:             log,
 		queryDurations: prometheus.NewSummaryVec(
 			prometheus.SummaryOpts{
@@ -290,7 +292,12 @@ func (c *OsqueryCollector) Collect(ch chan<- prometheus.Metric) {
 
 	wg := sync.WaitGroup{}
 	wg.Add(len(c.groups))
+	started := 0
 	for _, g := range c.groups {
+		if c.stagger > 0 && started > 0 {
+			time.Sleep(c.stagger)
+		}
+		started++
 		go func(g *queryGroup) {
 			defer wg.Done()
 

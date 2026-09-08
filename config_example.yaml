@@ -8,6 +8,10 @@ runtime:
   # caching (the default). Metrics derived from slowly-changing data benefit
   # most from caching; frequent scrapes then do not hit osqueryd on every pull.
   # cache_ttl: 30s
+  # Optional: fixed delay between query group executions within a single
+  # /metrics scrape. A value of 0 disables staggering (the default). Use a
+  # small value like 10ms-50ms to reduce bursts against osqueryd.
+  # query_stagger: 20ms
 
 metrics:
   # NOTE: counters must be monotonically increasing values. Most osquery
