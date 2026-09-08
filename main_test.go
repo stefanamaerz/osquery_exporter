@@ -1,16 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stefanamaerz/osquery_exporter/model"
+	"github.com/stefanamaerz/osquery_exporter/version"
 )
 
 func TestParseCacheTTL(t *testing.T) {
@@ -268,5 +273,46 @@ func TestParseByteSize(t *testing.T) {
 	}
 	if _, err := parseByteSize("abc"); err == nil {
 		t.Fatal("expected error for invalid size")
+	}
+}
+
+// TestVersionFlagUsesPackageVersion builds the binary with a custom injected
+// version and verifies the -version flag reports that value, not "dev".
+func TestVersionFlagUsesPackageVersion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping binary build test on windows")
+	}
+
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "osquery_exporter")
+
+	// Build with the same ldflags pattern the release workflows use.
+	wantVersion := "v9.9.9-test"
+	ldflags := "-X github.com/stefanamaerz/osquery_exporter/version.Version=" + wantVersion
+	cmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", bin, ".")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go build failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "-version")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err = cmd.Output()
+	if err != nil {
+		t.Fatalf("running binary failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	got := strings.TrimSpace(string(out))
+	if got != wantVersion {
+		t.Fatalf("-version output = %q, want %q", got, wantVersion)
+	}
+}
+
+// TestVersionPackageDefault sanity-checks that the package variable has a
+// non-empty default value.
+func TestVersionPackageDefault(t *testing.T) {
+	if version.Version == "" {
+		t.Fatal("version.Version is empty")
 	}
 }

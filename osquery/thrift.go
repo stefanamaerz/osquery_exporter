@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/apache/thrift/lib/go/thrift"
 	osquerygo "github.com/osquery/osquery-go"
 	osquerygen "github.com/osquery/osquery-go/gen/osquery"
 	"github.com/stefanamaerz/osquery_exporter/model"
@@ -121,6 +122,28 @@ func (r *ThriftRunner) maybeReconnect(gen int) error {
 	return r.reconnect()
 }
 
+// isTransportError reports whether err is a Thrift transport or protocol
+// failure that may benefit from reconnecting.
+func isTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Context cancellation means the caller gave up; the connection itself
+	// may still be healthy, so reconnecting would just add churn.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var te thrift.TTransportException
+	if errors.As(err, &te) {
+		return true
+	}
+	var pe thrift.TProtocolException
+	if errors.As(err, &pe) {
+		return true
+	}
+	return false
+}
+
 // Run executes the query over the Thrift extension socket.
 func (r *ThriftRunner) Run(ctx context.Context, query string) (*model.OsqueryResult, error) {
 	begin := time.Now()
@@ -134,9 +157,10 @@ func (r *ThriftRunner) Run(ctx context.Context, query string) (*model.OsqueryRes
 	}
 
 	// Only a transport-level failure justifies a reconnect. A well-formed
-	// osquery error response (SQL error, nil status) or a context deadline
-	// proves the connection is healthy, so reconnecting would just add load.
-	if errors.Is(err, context.DeadlineExceeded) {
+	// osquery error response (SQL error, nil status) or a context
+	// cancellation/deadline proves the connection is healthy, so reconnecting
+	// would just add load.
+	if !isTransportError(err) {
 		return nil, err
 	}
 
