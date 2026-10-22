@@ -15,7 +15,7 @@ Pre-built `.deb` packages are available on the [Releases](https://github.com/ste
 dpkg -i osquery-exporter_<version>_<arch>.deb
 ```
 
-Build requires Go 1.27 or later:
+Build requires Go 1.27.3 or later:
 
 ```bash
 git clone https://github.com/stefanamaerz/osquery_exporter.git
@@ -190,6 +190,12 @@ go build ./...
 go vet ./...
 go test ./...
 ```
+
+### Releases
+
+Create and push a new `v*` version tag only after the release changes have been
+merged, targeting the merged commit. The Release workflow builds Debian packages
+for `amd64` and `arm64` and publishes them in a GitHub Release.
 
 ### Load testing
 

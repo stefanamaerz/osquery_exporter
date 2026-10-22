@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Raised the minimum Go version to 1.27.3.
+- Updated Go libraries and transitive dependencies to their latest compatible releases.
+- Updated artifact upload/download and GitHub Release actions, retaining commit-SHA pins.
+
 ## [v0.1.0] - 2026-09-08
 
 ### Fixed
